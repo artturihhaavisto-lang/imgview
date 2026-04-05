@@ -1,0 +1,416 @@
+#!/usr/bin/env python3
+"""imgview — pan/zoom image viewer with directory navigation."""
+
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Pango
+
+import cairo
+import math
+import os
+import sys
+
+# ── constants ─────────────────────────────────────────────────────────────────
+
+IMAGE_EXTS = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
+    ".tiff", ".tif", ".ico", ".xpm", ".ppm", ".pgm", ".pbm",
+})
+
+ZOOM_STEP = 1.25
+ZOOM_MIN  = 0.005
+ZOOM_MAX  = 32.0
+
+# ── CSS ───────────────────────────────────────────────────────────────────────
+
+CSS = b"""
+window { background: #0e0e0e; }
+#statusbar {
+    background: rgba(12,12,12,0.95);
+    border-top: 1px solid #202020;
+    padding: 3px 10px;
+}
+#statusbar label {
+    font-family: monospace;
+    font-size: 11px;
+    color: #666;
+}
+#st-name  { color: #bbb; }
+#st-index { color: #555; }
+#st-dims  { color: #666; }
+#st-zoom  { color: #888; min-width: 44px; }
+"""
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _is_image(path: str) -> bool:
+    return os.path.isfile(path) and os.path.splitext(path)[1].lower() in IMAGE_EXTS
+
+def _dir_images(d: str) -> list:
+    try:
+        return sorted(
+            [os.path.join(d, f) for f in os.listdir(d)
+             if _is_image(os.path.join(d, f))],
+            key=lambda p: os.path.basename(p).lower(),
+        )
+    except OSError:
+        return []
+
+def _resolve(args: list) -> tuple:
+    """Return (image_list, start_index) from CLI args."""
+    if not args:
+        return [], 0
+    if len(args) == 1:
+        a = os.path.abspath(args[0])
+        if os.path.isdir(a):
+            return _dir_images(a), 0
+        if _is_image(a):
+            siblings = _dir_images(os.path.dirname(a))
+            idx = next((i for i, p in enumerate(siblings)
+                        if os.path.samefile(p, a)), 0)
+            return siblings, idx
+    # multiple args
+    paths = []
+    for a in args:
+        a = os.path.abspath(a)
+        if os.path.isdir(a):
+            paths.extend(_dir_images(a))
+        elif _is_image(a):
+            paths.append(a)
+    return paths, 0
+
+# ── canvas ────────────────────────────────────────────────────────────────────
+
+class Canvas(Gtk.DrawingArea):
+    """Pan/zoom image display using Cairo."""
+
+    def __init__(self):
+        super().__init__()
+        self.pixbuf = None
+        self.zoom   = 1.0
+        self.ox     = 0.0   # x offset (pixels from left)
+        self.oy     = 0.0   # y offset (pixels from top)
+        self._ds    = None  # drag start (x, y)
+        self._do    = None  # drag offset (ox, oy) at start
+
+        self.add_events(
+            Gdk.EventMask.BUTTON_PRESS_MASK   |
+            Gdk.EventMask.BUTTON_RELEASE_MASK |
+            Gdk.EventMask.POINTER_MOTION_MASK |
+            Gdk.EventMask.SCROLL_MASK         |
+            Gdk.EventMask.SMOOTH_SCROLL_MASK
+        )
+        self.connect("draw",                 self._draw)
+        self.connect("button-press-event",   self._btn_press)
+        self.connect("button-release-event", self._btn_release)
+        self.connect("motion-notify-event",  self._motion)
+        self.connect("scroll-event",         self._scroll)
+        self.connect("configure-event",      self._configure)
+
+    # ── public api ────────────────────────────────────────────────────────────
+
+    def load(self, path: str):
+        """Load image. Returns error string or None."""
+        try:
+            pb = GdkPixbuf.Pixbuf.new_from_file(path)
+        except Exception as e:
+            self.pixbuf = None
+            self.queue_draw()
+            return str(e)
+        self.pixbuf = pb
+        self._fit_to_window()
+        return None
+
+    def fit(self):
+        self._fit_to_window(force=True)
+
+    def actual_size(self):
+        if not self.pixbuf:
+            return
+        a = self.get_allocation()
+        self.zoom = 1.0
+        self.ox   = (a.width  - self.pixbuf.get_width())  / 2
+        self.oy   = (a.height - self.pixbuf.get_height()) / 2
+        self.queue_draw()
+
+    def zoom_step(self, factor: float, cx=None, cy=None):
+        if not self.pixbuf:
+            return
+        a = self.get_allocation()
+        if cx is None: cx = a.width  / 2
+        if cy is None: cy = a.height / 2
+        # keep the image point under cx/cy fixed
+        ix = (cx - self.ox) / self.zoom
+        iy = (cy - self.oy) / self.zoom
+        self.zoom = max(ZOOM_MIN, min(ZOOM_MAX, self.zoom * factor))
+        self.ox   = cx - ix * self.zoom
+        self.oy   = cy - iy * self.zoom
+        self.queue_draw()
+
+    def rotate(self, cw: bool):
+        if not self.pixbuf:
+            return
+        rot = (GdkPixbuf.PixbufRotation.CLOCKWISE
+               if cw else GdkPixbuf.PixbufRotation.COUNTERCLOCKWISE)
+        self.pixbuf = self.pixbuf.rotate_simple(rot)
+        self._fit_to_window(force=True)
+
+    def flip_h(self):
+        if self.pixbuf:
+            self.pixbuf = self.pixbuf.flip(True)
+            self.queue_draw()
+
+    # ── private ───────────────────────────────────────────────────────────────
+
+    def _fit_to_window(self, force=False):
+        if not self.pixbuf:
+            return
+        a  = self.get_allocation()
+        if a.width <= 1:
+            return
+        pw, ph = self.pixbuf.get_width(), self.pixbuf.get_height()
+        scale  = min(a.width / pw, a.height / ph, 1.0)
+        if force or pw * self.zoom > a.width or ph * self.zoom > a.height:
+            self.zoom = scale
+        self.ox = (a.width  - pw * self.zoom) / 2
+        self.oy = (a.height - ph * self.zoom) / 2
+        self.queue_draw()
+
+    def _configure(self, widget, event):
+        self._fit_to_window()
+
+    def _draw(self, widget, cr):
+        a  = self.get_allocation()
+        sq = 20
+        # checkerboard background (reveals alpha)
+        for row in range(0, a.height + sq, sq):
+            for col in range(0, a.width + sq, sq):
+                v = 0.095 if (row // sq + col // sq) % 2 == 0 else 0.065
+                cr.set_source_rgb(v, v, v)
+                cr.rectangle(col, row, sq, sq)
+                cr.fill()
+
+        if not self.pixbuf:
+            cr.set_source_rgba(0.45, 0.45, 0.45, 0.7)
+            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+            cr.set_font_size(16)
+            msg = "No image"
+            te  = cr.text_extents(msg)
+            cr.move_to((a.width - te.width) / 2, (a.height + te.height) / 2)
+            cr.show_text(msg)
+            return
+
+        cr.save()
+        cr.translate(self.ox, self.oy)
+        cr.scale(self.zoom, self.zoom)
+        Gdk.cairo_set_source_pixbuf(cr, self.pixbuf, 0, 0)
+        cr.get_source().set_filter(cairo.FILTER_BILINEAR)
+        cr.paint()
+        cr.restore()
+
+    def _btn_press(self, w, e):
+        if e.button == 1:
+            self._ds = (e.x, e.y)
+            self._do = (self.ox, self.oy)
+        return True
+
+    def _btn_release(self, w, e):
+        self._ds = None
+        return True
+
+    def _motion(self, w, e):
+        if self._ds:
+            self.ox = self._do[0] + e.x - self._ds[0]
+            self.oy = self._do[1] + e.y - self._ds[1]
+            self.queue_draw()
+        return True
+
+    def _scroll(self, w, e):
+        if e.direction == Gdk.ScrollDirection.SMOOTH:
+            _, dx, dy = e.get_scroll_deltas()
+            factor = ZOOM_STEP ** (-dy)
+        elif e.direction == Gdk.ScrollDirection.UP:
+            factor = ZOOM_STEP
+        elif e.direction == Gdk.ScrollDirection.DOWN:
+            factor = 1.0 / ZOOM_STEP
+        else:
+            return True
+        self.zoom_step(factor, e.x, e.y)
+        return True
+
+# ── status bar ────────────────────────────────────────────────────────────────
+
+class StatusBar(Gtk.Box):
+    def __init__(self):
+        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=14,
+                         name="statusbar")
+        self._lname  = Gtk.Label(xalign=0, name="st-name")
+        self._lname.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+        self._lname.set_hexpand(True)
+        self._lidx   = Gtk.Label(name="st-index")
+        self._ldims  = Gtk.Label(name="st-dims")
+        self._lzoom  = Gtk.Label(name="st-zoom")
+        for w in (self._lname, self._lidx, self._ldims, self._lzoom):
+            self.pack_start(w, w is self._lname, w is self._lname, 0)
+
+    def update(self, *, path=None, idx=None, total=None,
+               w=None, h=None, zoom=None, error=None):
+        if error:
+            self._lname.set_text(f"Error: {error}")
+            self._ldims.set_text("")
+        elif path is not None:
+            self._lname.set_text(os.path.basename(path))
+            if w and h:
+                self._ldims.set_text(f"{w}×{h}")
+        if idx is not None and total is not None:
+            self._lidx.set_text(f"{idx + 1}/{total}")
+        if zoom is not None:
+            self._lzoom.set_text(f"{zoom * 100:.0f}%")
+
+# ── main window ───────────────────────────────────────────────────────────────
+
+class ImgViewWindow(Gtk.ApplicationWindow):
+    def __init__(self, app, paths, start=0):
+        super().__init__(application=app, title="imgview")
+        self.set_default_size(1100, 780)
+
+        self._paths     = paths
+        self._idx       = start
+        self._is_fs     = False
+        self._slide_id  = None
+        self._slide_sec = 4
+
+        self._canvas    = Canvas()
+        self._statusbar = StatusBar()
+
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        vbox.pack_start(self._canvas,    True,  True,  0)
+        vbox.pack_start(self._statusbar, False, False, 0)
+        self.add(vbox)
+
+        self.connect("key-press-event", self._key)
+        self.show_all()
+
+        if self._paths:
+            GLib.idle_add(self._load, self._idx)
+
+    # ── navigation ────────────────────────────────────────────────────────────
+
+    def _load(self, idx):
+        if not self._paths:
+            return
+        self._idx = idx % len(self._paths)
+        path = self._paths[self._idx]
+        err  = self._canvas.load(path)
+        pb   = self._canvas.pixbuf
+        self._statusbar.update(
+            path  = path,
+            idx   = self._idx,
+            total = len(self._paths),
+            w     = pb.get_width()  if pb else None,
+            h     = pb.get_height() if pb else None,
+            zoom  = self._canvas.zoom,
+            error = err,
+        )
+        self.set_title(f"imgview — {os.path.basename(path)}")
+
+    def _go(self, delta):
+        if self._paths:
+            self._load(self._idx + delta)
+
+    def _refresh_zoom(self):
+        pb = self._canvas.pixbuf
+        self._statusbar.update(
+            w    = pb.get_width()  if pb else None,
+            h    = pb.get_height() if pb else None,
+            zoom = self._canvas.zoom,
+        )
+
+    # ── keyboard ──────────────────────────────────────────────────────────────
+
+    def _key(self, widget, event):
+        k = event.keyval
+        c = self._canvas
+
+        # navigation
+        if   k in (Gdk.KEY_Right, Gdk.KEY_n, Gdk.KEY_l, Gdk.KEY_Page_Down):
+            self._go(+1)
+        elif k in (Gdk.KEY_Left,  Gdk.KEY_p, Gdk.KEY_h, Gdk.KEY_Page_Up):
+            self._go(-1)
+        elif k == Gdk.KEY_End:   self._load(len(self._paths) - 1)
+        elif k == Gdk.KEY_Home:  self._load(0)
+
+        # zoom
+        elif k in (Gdk.KEY_plus, Gdk.KEY_equal, Gdk.KEY_KP_Add):
+            c.zoom_step(ZOOM_STEP);     self._refresh_zoom()
+        elif k in (Gdk.KEY_minus, Gdk.KEY_KP_Subtract):
+            c.zoom_step(1.0 / ZOOM_STEP); self._refresh_zoom()
+        elif k in (Gdk.KEY_0, Gdk.KEY_KP_0):
+            c.actual_size();            self._refresh_zoom()
+        elif k in (Gdk.KEY_f, Gdk.KEY_w):
+            c.fit();                    self._refresh_zoom()
+
+        # rotation / flip
+        elif k == Gdk.KEY_r:     c.rotate(cw=True);  self._refresh_zoom()
+        elif k == Gdk.KEY_R:     c.rotate(cw=False); self._refresh_zoom()
+        elif k == Gdk.KEY_slash: c.flip_h()
+
+        # misc
+        elif k == Gdk.KEY_F11:   self._toggle_fs()
+        elif k == Gdk.KEY_i:
+            self._statusbar.set_visible(not self._statusbar.get_visible())
+        elif k == Gdk.KEY_s:     self._toggle_slideshow()
+        elif k in (Gdk.KEY_q, Gdk.KEY_Escape):
+            if self._is_fs: self._toggle_fs()
+            else:           self.get_application().quit()
+
+        return True
+
+    # ── fullscreen / slideshow ────────────────────────────────────────────────
+
+    def _toggle_fs(self):
+        if self._is_fs: self.unfullscreen()
+        else:           self.fullscreen()
+        self._is_fs = not self._is_fs
+
+    def _toggle_slideshow(self):
+        if self._slide_id:
+            GLib.source_remove(self._slide_id)
+            self._slide_id = None
+        else:
+            self._slide_id = GLib.timeout_add_seconds(
+                self._slide_sec, self._slide_tick
+            )
+
+    def _slide_tick(self):
+        self._go(+1)
+        return True
+
+# ── application ───────────────────────────────────────────────────────────────
+
+class ImgViewApp(Gtk.Application):
+    def __init__(self, paths, start):
+        super().__init__(application_id="com.local.imgview")
+        self._paths = paths
+        self._start = start
+
+    def do_activate(self):
+        css = Gtk.CssProvider()
+        css.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(), css,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
+        ImgViewWindow(self, self._paths, self._start)
+
+def main():
+    paths, start = _resolve(sys.argv[1:])
+    if not paths:
+        print("imgview: no images found", file=sys.stderr)
+        print("usage: imgview <file|dir> [...]", file=sys.stderr)
+        sys.exit(1)
+    ImgViewApp(paths, start).run([])
+
+if __name__ == "__main__":
+    main()

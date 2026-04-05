@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=imgview
+Comment=Pan/zoom image viewer
+Exec=/home/b/imgview/imgview %F
+Icon=image-viewer
+Terminal=false
+Type=Application
+MimeType=image/png;image/jpeg;image/gif;image/webp;image/bmp;image/tiff;image/x-tiff;image/ico;image/x-ico;image/x-icon;image/vnd.microsoft.icon;image/xpm;image/x-portable-pixmap;image/x-portable-graymap;image/x-portable-bitmap;
+Categories=Graphics;Viewer;
