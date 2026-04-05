@@ -4,7 +4,7 @@
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Pango
+from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Pango, Gio
 
 import cairo
 import math
@@ -391,7 +391,8 @@ class ImgViewWindow(Gtk.ApplicationWindow):
 
 class ImgViewApp(Gtk.Application):
     def __init__(self, paths, start):
-        super().__init__(application_id="com.local.imgview")
+        super().__init__(application_id="com.local.imgview",
+                         flags=Gio.ApplicationFlags.NON_UNIQUE)
         self._paths = paths
         self._start = start
 
