@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=imgview
 Comment=Pan/zoom image viewer
-Exec=/home/b/imgview/imgview %F
+Exec=imgview %F
 Icon=image-viewer
 Terminal=false
 Type=Application

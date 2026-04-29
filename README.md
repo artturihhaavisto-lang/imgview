@@ -33,16 +33,16 @@ A lightweight pan/zoom image viewer inspired by Photoshop, without the tools.
 ## Install
 
 ```bash
-git clone https://github.com/<username>/imgview.git
-cd imgview
-sudo ln -s $(pwd)/imgview /usr/local/bin/imgview
+bash <(curl -fsSL https://raw.githubusercontent.com/artturihhaavisto-lang/imgview/master/install.sh)
 ```
 
-## Set as Default
+This installs `imgview` for the current user under `~/.local`, creates a desktop entry,
+and sets it as the default handler for common image MIME types.
+
+For a system-wide install:
 
 ```bash
-cp imgview.desktop ~/.local/share/applications/
-xdg-mime default imgview.desktop image/png image/jpeg image/gif image/webp image/bmp image/tiff
+bash <(curl -fsSL https://raw.githubusercontent.com/artturihhaavisto-lang/imgview/master/install.sh) --system
 ```
 
 ## Requirements
