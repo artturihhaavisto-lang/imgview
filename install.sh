@@ -100,18 +100,28 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
+if command -v sudo >/dev/null 2>&1 && [[ "$(id -u)" -ne 0 ]]; then
+  ROOT_CMD=(sudo)
+else
+  ROOT_CMD=()
+fi
+
 if [[ "$INSTALL_MODE" == "system" || "$INSTALL_PREFIX" != "$DEFAULT_PREFIX" ]]; then
   if command -v sudo >/dev/null 2>&1 && [[ "$(id -u)" -ne 0 ]]; then
-    SUDO=(sudo)
+    INSTALL_CMD=(sudo)
   else
-    SUDO=()
+    INSTALL_CMD=()
   fi
 else
-  SUDO=()
+  INSTALL_CMD=()
 fi
 
 run_root() {
-  "${SUDO[@]}" "$@"
+  "${ROOT_CMD[@]}" "$@"
+}
+
+run_install() {
+  "${INSTALL_CMD[@]}" "$@"
 }
 
 detect_pkg_manager() {
@@ -173,7 +183,6 @@ fetch_repo() {
     git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$repo_dir"
   fi
 
-  printf '%s\n' "$repo_dir"
 }
 
 write_desktop_file() {
@@ -220,17 +229,17 @@ main() {
 
   install_deps
 
-  local repo_dir install_dir bin_dir bin_path app_path
-  repo_dir="$(fetch_repo)"
+  local install_dir bin_dir bin_path app_path
+  fetch_repo
   install_dir="${INSTALL_PREFIX}/lib/${APP_NAME}"
   bin_dir="${INSTALL_PREFIX}/bin"
   bin_path="${bin_dir}/${APP_NAME}"
   app_path="${install_dir}/${APP_NAME}"
 
   log "installing into ${INSTALL_PREFIX}"
-  run_root mkdir -p "$install_dir" "$bin_dir"
-  run_root install -m 755 "${repo_dir}/imgview" "$app_path"
-  run_root ln -sf "$app_path" "$bin_path"
+  run_install mkdir -p "$install_dir" "$bin_dir"
+  run_install install -m 755 "${XDG_CACHE_HOME:-$HOME/.cache}/imgview-installer/repo/imgview" "$app_path"
+  run_install ln -sf "$app_path" "$bin_path"
 
   set_defaults "$app_path"
 
