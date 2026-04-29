@@ -31,7 +31,7 @@ MIME_TYPES=(
 )
 
 log() {
-  printf '[imgview-install] %s\n' "$*"
+  printf '[imgview-install] %s\n' "$*" >&2
 }
 
 die() {
