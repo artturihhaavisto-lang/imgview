@@ -11,6 +11,11 @@ A lightweight pan/zoom image viewer inspired by Photoshop, without the tools.
 - **Fullscreen**: Press F11
 - **Slideshow**: Press S to auto-advance through directory
 
+##Screenshots
+<img width="1898" height="1020" alt="image" src="https://github.com/user-attachments/assets/63c44659-9cfa-4d5f-a75a-a9132981d0c4" />
+
+
+
 ## Keybindings
 
 | Key | Action |
