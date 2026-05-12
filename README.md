@@ -55,7 +55,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/artturihhaavisto-lang/imgvie
 ```bash
 make
 ./build/imgview <file|dir> [...]
-./build/vidview <file|dir> [...]
 ```
 
 ## Requirements
@@ -64,30 +63,9 @@ make
 - make
 - pkg-config
 - GTK3 development headers
-- GStreamer development headers and base/good plugins
 
 ## Usage
 
 ```bash
 imgview <file|dir> [...]
-vidview <file|dir> [...]
 ```
-
-## vidview
-
-`vidview` is a lightweight GTK/GStreamer video player with the same dark, compact style.
-
-| Key | Action |
-|-----|--------|
-| `Space` / `k` | Play / pause |
-| `Right` / `l` | Seek forward 5s |
-| `Left` / `h` | Seek backward 5s |
-| `Page Down` / `Page Up` | Seek forward / backward 60s |
-| `Home` / `End` | Start / near end |
-| `n` / `Down` | Next video |
-| `p` / `Up` | Previous video |
-| `+` / `-` | Volume up / down |
-| `m` | Mute |
-| `f` / `F11` | Fullscreen |
-| `i` | Toggle controls |
-| `q` / `Esc` | Quit |
