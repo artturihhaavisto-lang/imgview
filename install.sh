@@ -198,21 +198,21 @@ install_deps() {
     apt-get)
       log "installing dependencies with apt"
       run_root apt-get update
-      run_root apt-get install -y build-essential make pkg-config libgtk-3-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good xdg-utils git
+      run_root apt-get install -y build-essential make pkg-config libgtk-3-dev xdg-utils git
       ;;
     dnf)
       log "installing dependencies with dnf"
-      run_root dnf install -y gcc make pkgconf-pkg-config gtk3-devel gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good xdg-utils git
+      run_root dnf install -y gcc make pkgconf-pkg-config gtk3-devel xdg-utils git
       ;;
     pacman)
       log "installing dependencies with pacman"
       # Avoid partial upgrades on Arch; sync + install without -u can break
       # version-locked packages when core libraries move ahead of installed plugins.
-      run_root pacman -Syu --noconfirm --needed base-devel pkgconf gtk3 gstreamer gst-plugins-base gst-plugins-good xdg-utils git
+      run_root pacman -Syu --noconfirm --needed base-devel pkgconf gtk3 xdg-utils git
       ;;
     zypper)
       log "installing dependencies with zypper"
-      run_root zypper --non-interactive install gcc make pkg-config gtk3-devel gstreamer-devel gstreamer-plugins-base-devel gstreamer-plugins-good xdg-utils git
+      run_root zypper --non-interactive install gcc make pkg-config gtk3-devel xdg-utils git
       ;;
   esac
 }
@@ -297,11 +297,10 @@ main() {
   need_cmd make
   need_cmd pkg-config
 
-  local src_dir bin_dir bin_path vid_bin_path
+  local src_dir bin_dir bin_path
   src_dir="$(source_dir)"
   bin_dir="${INSTALL_PREFIX}/bin"
   bin_path="${bin_dir}/${APP_NAME}"
-  vid_bin_path="${bin_dir}/vidview"
 
   [[ -f "${src_dir}/Makefile" ]] || die "missing Makefile in ${src_dir}"
 
@@ -309,13 +308,11 @@ main() {
   make -C "$src_dir" clean all
   run_install mkdir -p "$bin_dir"
   run_install install -m 755 "${src_dir}/build/${APP_NAME}" "$bin_path"
-  run_install install -m 755 "${src_dir}/build/vidview" "$vid_bin_path"
 
   install_desktop_entry "$bin_path"
 
   log "installation complete"
   log "binary: ${bin_path}"
-  log "video player: ${vid_bin_path}"
   log "desktop file: ${XDG_DATA_HOME:-$HOME/.local/share}/applications/${APP_ID}"
   if [[ ":$PATH:" != *":${bin_dir}:"* ]]; then
     log "add ${bin_dir} to PATH if the command is not found in new shells"

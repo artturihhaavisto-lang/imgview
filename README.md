@@ -76,16 +76,14 @@ GitHub instead.
 | `--force-clone` | Re-download the cached repository before installing. |
 
 On Arch-based systems, the installer uses `pacman -Syu --needed` before installing
-dependencies. This avoids partial-upgrade conflicts with version-locked packages such
-as GStreamer plugins. If you manage dependencies yourself, install the packages listed
-below and pass `--skip-deps`.
+dependencies. This avoids partial-upgrade conflicts. If you manage dependencies
+yourself, install the packages listed below and pass `--skip-deps`.
 
 ## Build
 
 ```bash
 make
 ./build/imgview <file|dir> [...]
-./build/vidview <file|dir> [...]
 ```
 
 ## Requirements
@@ -94,39 +92,18 @@ make
 - make
 - pkg-config
 - GTK3 development headers
-- GStreamer development headers and base/good plugins
 
 Package names used by the installer:
 
 | Distribution | Packages |
 |--------------|----------|
-| Arch | `base-devel pkgconf gtk3 gstreamer gst-plugins-base gst-plugins-good xdg-utils git` |
-| Debian/Ubuntu | `build-essential make pkg-config libgtk-3-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good xdg-utils git` |
-| Fedora | `gcc make pkgconf-pkg-config gtk3-devel gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good xdg-utils git` |
-| openSUSE | `gcc make pkg-config gtk3-devel gstreamer-devel gstreamer-plugins-base-devel gstreamer-plugins-good xdg-utils git` |
+| Arch | `base-devel pkgconf gtk3 xdg-utils git` |
+| Debian/Ubuntu | `build-essential make pkg-config libgtk-3-dev xdg-utils git` |
+| Fedora | `gcc make pkgconf-pkg-config gtk3-devel xdg-utils git` |
+| openSUSE | `gcc make pkg-config gtk3-devel xdg-utils git` |
 
 ## Usage
 
 ```bash
 imgview <file|dir> [...]
-vidview <file|dir> [...]
 ```
-
-## vidview
-
-`vidview` is a lightweight GTK/GStreamer video player with the same dark, compact style.
-
-| Key | Action |
-|-----|--------|
-| `Space` / `k` | Play / pause |
-| `Right` / `l` | Seek forward 5s |
-| `Left` / `h` | Seek backward 5s |
-| `Page Down` / `Page Up` | Seek forward / backward 60s |
-| `Home` / `End` | Start / near end |
-| `n` / `Down` | Next video |
-| `p` / `Up` | Previous video |
-| `+` / `-` | Volume up / down |
-| `m` | Mute |
-| `f` / `F11` | Fullscreen |
-| `i` | Toggle controls |
-| `q` / `Esc` | Quit |
