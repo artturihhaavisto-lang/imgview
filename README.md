@@ -50,6 +50,36 @@ For a system-wide install:
 bash <(curl -fsSL https://raw.githubusercontent.com/artturihhaavisto-lang/imgview/master/install.sh) --system
 ```
 
+From a local checkout:
+
+```bash
+git clone https://github.com/artturihhaavisto-lang/imgview.git
+cd imgview
+bash ./install.sh
+```
+
+The local checkout path builds and installs the files you have on disk. Use
+`--branch`, `--repo`, or `--force-clone` when you want the installer to fetch from
+GitHub instead.
+
+### Installer options
+
+| Option | Description |
+|--------|-------------|
+| `--user` | Install under `~/.local` for the current user. This is the default. |
+| `--system` | Install the executable under `/usr/local`. The script uses `sudo` when needed. |
+| `--prefix PATH` | Install under a custom prefix. User-writable prefixes do not require `sudo`. |
+| `--skip-deps` | Skip package manager dependency installation. |
+| `--no-defaults` | Install the desktop entry without changing default image handlers. |
+| `--branch NAME` | Fetch and install a different Git branch. |
+| `--repo URL` | Fetch and install from a different repository URL. |
+| `--force-clone` | Re-download the cached repository before installing. |
+
+On Arch-based systems, the installer uses `pacman -Syu --needed` before installing
+dependencies. This avoids partial-upgrade conflicts with version-locked packages such
+as GStreamer plugins. If you manage dependencies yourself, install the packages listed
+below and pass `--skip-deps`.
+
 ## Build
 
 ```bash
@@ -65,6 +95,15 @@ make
 - pkg-config
 - GTK3 development headers
 - GStreamer development headers and base/good plugins
+
+Package names used by the installer:
+
+| Distribution | Packages |
+|--------------|----------|
+| Arch | `base-devel pkgconf gtk3 gstreamer gst-plugins-base gst-plugins-good xdg-utils git` |
+| Debian/Ubuntu | `build-essential make pkg-config libgtk-3-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good xdg-utils git` |
+| Fedora | `gcc make pkgconf-pkg-config gtk3-devel gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good xdg-utils git` |
+| openSUSE | `gcc make pkg-config gtk3-devel gstreamer-devel gstreamer-plugins-base-devel gstreamer-plugins-good xdg-utils git` |
 
 ## Usage
 

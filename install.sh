@@ -9,8 +9,14 @@ APP_ID="imgview.desktop"
 DEFAULT_PREFIX="${HOME}/.local"
 SYSTEM_PREFIX="/usr/local"
 INSTALL_PREFIX="${INSTALL_PREFIX:-$DEFAULT_PREFIX}"
-INSTALL_MODE="user"
+INSTALL_DEPS=1
+SET_MIME_DEFAULTS=1
 FORCE_CLONE=0
+USE_LOCAL_SOURCE=1
+CACHE_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/imgview-installer"
+REPO_DIR="${CACHE_ROOT}/repo"
+ROOT_CMD=()
+INSTALL_CMD=()
 
 MIME_TYPES=(
   image/png
@@ -41,7 +47,9 @@ die() {
 
 usage() {
   cat <<'EOF'
-Usage: bash <(curl -fsSL URL) [options]
+Usage:
+  bash <(curl -fsSL URL) [options]
+  bash ./install.sh [options]
 
 Options:
   --user             Install for the current user under ~/.local (default)
@@ -49,6 +57,8 @@ Options:
   --prefix PATH      Install under a custom prefix
   --branch NAME      Install from a different git branch
   --repo URL         Install from a different repository URL
+  --skip-deps        Do not install system packages
+  --no-defaults      Do not set imgview as the default image handler
   --force-clone      Re-download even if a cached clone already exists
   -h, --help         Show this help
 EOF
@@ -57,33 +67,44 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --user)
-      INSTALL_MODE="user"
       INSTALL_PREFIX="$DEFAULT_PREFIX"
       shift
       ;;
     --system)
-      INSTALL_MODE="system"
       INSTALL_PREFIX="$SYSTEM_PREFIX"
       shift
       ;;
     --prefix)
       [[ $# -ge 2 ]] || die "--prefix requires a value"
+      [[ -n "$2" ]] || die "--prefix requires a non-empty value"
       INSTALL_PREFIX="$2"
-      INSTALL_MODE="custom"
       shift 2
       ;;
     --branch)
       [[ $# -ge 2 ]] || die "--branch requires a value"
+      [[ -n "$2" ]] || die "--branch requires a non-empty value"
       BRANCH="$2"
+      USE_LOCAL_SOURCE=0
       shift 2
       ;;
     --repo)
       [[ $# -ge 2 ]] || die "--repo requires a value"
+      [[ -n "$2" ]] || die "--repo requires a non-empty value"
       REPO_URL="$2"
+      USE_LOCAL_SOURCE=0
       shift 2
+      ;;
+    --skip-deps)
+      INSTALL_DEPS=0
+      shift
+      ;;
+    --no-defaults)
+      SET_MIME_DEFAULTS=0
+      shift
       ;;
     --force-clone)
       FORCE_CLONE=1
+      USE_LOCAL_SOURCE=0
       shift
       ;;
     -h|--help)
@@ -100,23 +121,47 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
-if command -v sudo >/dev/null 2>&1 && [[ "$(id -u)" -ne 0 ]]; then
-  ROOT_CMD=(sudo)
-else
-  ROOT_CMD=()
-fi
+nearest_existing_dir() {
+  local path
+  path="$1"
 
-if [[ "$INSTALL_MODE" == "system" || "$INSTALL_PREFIX" != "$DEFAULT_PREFIX" ]]; then
+  while [[ ! -e "$path" && "$path" != "/" ]]; do
+    path="$(dirname "$path")"
+  done
+
+  [[ -d "$path" ]] || path="$(dirname "$path")"
+  printf '%s\n' "$path"
+}
+
+prefix_needs_root() {
+  local existing_dir
+
+  [[ "$(id -u)" -eq 0 ]] && return 1
+
+  existing_dir="$(nearest_existing_dir "$INSTALL_PREFIX")"
+  [[ -w "$existing_dir" ]] && return 1
+
+  return 0
+}
+
+setup_privileges() {
   if command -v sudo >/dev/null 2>&1 && [[ "$(id -u)" -ne 0 ]]; then
-    INSTALL_CMD=(sudo)
-  else
-    INSTALL_CMD=()
+    ROOT_CMD=(sudo)
   fi
-else
-  INSTALL_CMD=()
-fi
+
+  if prefix_needs_root; then
+    if [[ "${#ROOT_CMD[@]}" -eq 0 ]]; then
+      die "installing to ${INSTALL_PREFIX} requires root; run as root, install sudo, or use --user"
+    fi
+    INSTALL_CMD=("${ROOT_CMD[@]}")
+  fi
+}
 
 run_root() {
+  if [[ "$(id -u)" -ne 0 && "${#ROOT_CMD[@]}" -eq 0 ]]; then
+    die "installing dependencies requires root; run as root, install sudo, or pass --skip-deps"
+  fi
+
   "${ROOT_CMD[@]}" "$@"
 }
 
@@ -137,6 +182,12 @@ detect_pkg_manager() {
 
 install_deps() {
   local pkgm
+
+  if [[ "$INSTALL_DEPS" -eq 0 ]]; then
+    log "skipping dependency installation"
+    return 0
+  fi
+
   pkgm="$(detect_pkg_manager || true)"
   if [[ -z "$pkgm" ]]; then
     log "no supported package manager detected; skipping dependency installation"
@@ -155,7 +206,9 @@ install_deps() {
       ;;
     pacman)
       log "installing dependencies with pacman"
-      run_root pacman -Sy --noconfirm base-devel pkgconf gtk3 gstreamer gst-plugins-base gst-plugins-good xdg-utils git
+      # Avoid partial upgrades on Arch; sync + install without -u can break
+      # version-locked packages when core libraries move ahead of installed plugins.
+      run_root pacman -Syu --noconfirm --needed base-devel pkgconf gtk3 gstreamer gst-plugins-base gst-plugins-good xdg-utils git
       ;;
     zypper)
       log "installing dependencies with zypper"
@@ -167,22 +220,30 @@ install_deps() {
 fetch_repo() {
   need_cmd git
 
-  local cache_root repo_dir
-  cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/imgview-installer"
-  repo_dir="${cache_root}/repo"
+  mkdir -p "$CACHE_ROOT"
 
-  mkdir -p "$cache_root"
-
-  if [[ -d "${repo_dir}/.git" && "$FORCE_CLONE" -eq 0 ]]; then
+  if [[ -d "${REPO_DIR}/.git" && "$FORCE_CLONE" -eq 0 ]]; then
     log "updating cached repository"
-    git -C "$repo_dir" fetch --depth 1 origin "$BRANCH"
-    git -C "$repo_dir" checkout -q FETCH_HEAD
+    git -C "$REPO_DIR" fetch --depth 1 origin "$BRANCH"
+    git -C "$REPO_DIR" checkout -q FETCH_HEAD
   else
-    rm -rf "$repo_dir"
+    rm -rf "$REPO_DIR"
     log "cloning repository"
-    git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$repo_dir"
+    git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$REPO_DIR"
+  fi
+}
+
+source_dir() {
+  local script_dir
+  script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P || true)"
+
+  if [[ "$USE_LOCAL_SOURCE" -eq 1 && -n "$script_dir" && -f "${script_dir}/Makefile" ]]; then
+    printf '%s\n' "$script_dir"
+    return 0
   fi
 
+  fetch_repo
+  printf '%s\n' "$REPO_DIR"
 }
 
 write_desktop_file() {
@@ -203,7 +264,7 @@ Categories=Graphics;Viewer;
 EOF
 }
 
-set_defaults() {
+install_desktop_entry() {
   local desktop_dir desktop_path mime
   desktop_dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
   desktop_path="${desktop_dir}/${APP_ID}"
@@ -213,6 +274,11 @@ set_defaults() {
 
   if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database "$desktop_dir" >/dev/null 2>&1 || true
+  fi
+
+  if [[ "$SET_MIME_DEFAULTS" -eq 0 ]]; then
+    log "desktop entry installed; default image handlers unchanged"
+    return 0
   fi
 
   if command -v xdg-mime >/dev/null 2>&1; then
@@ -225,25 +291,27 @@ set_defaults() {
 }
 
 main() {
+  setup_privileges
   install_deps
 
   need_cmd make
   need_cmd pkg-config
 
-  local repo_dir bin_dir bin_path vid_bin_path
-  fetch_repo
-  repo_dir="${XDG_CACHE_HOME:-$HOME/.cache}/imgview-installer/repo"
+  local src_dir bin_dir bin_path vid_bin_path
+  src_dir="$(source_dir)"
   bin_dir="${INSTALL_PREFIX}/bin"
   bin_path="${bin_dir}/${APP_NAME}"
   vid_bin_path="${bin_dir}/vidview"
 
-  log "installing into ${INSTALL_PREFIX}"
-  make -C "$repo_dir" clean all
-  run_install mkdir -p "$bin_dir"
-  run_install install -m 755 "${repo_dir}/build/${APP_NAME}" "$bin_path"
-  run_install install -m 755 "${repo_dir}/build/vidview" "$vid_bin_path"
+  [[ -f "${src_dir}/Makefile" ]] || die "missing Makefile in ${src_dir}"
 
-  set_defaults "$bin_path"
+  log "installing into ${INSTALL_PREFIX}"
+  make -C "$src_dir" clean all
+  run_install mkdir -p "$bin_dir"
+  run_install install -m 755 "${src_dir}/build/${APP_NAME}" "$bin_path"
+  run_install install -m 755 "${src_dir}/build/vidview" "$vid_bin_path"
+
+  install_desktop_entry "$bin_path"
 
   log "installation complete"
   log "binary: ${bin_path}"
