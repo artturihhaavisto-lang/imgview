@@ -70,7 +70,7 @@ int main(int argc, char **argv) {
     ImgView view = {0};
     view.paths = new_path_array();
     Canvas *c = &view.canvas;
-    g_assert_true(is_image_file(argv[1]));
+    g_assert_true(is_media_file(argv[1]));
     g_assert_true(is_video_ext("UPPER.MP4"));
     g_assert_null(video_load(&view, argv[1]));
     for (int i = 0; !c->pixbuf && i < 500; i++) pump(10);
@@ -172,7 +172,7 @@ int main(int argc, char **argv) {
     c->volume = 0.5;
     c->muted = false;
     g_assert_true(is_audio_ext("TRACK.MP3"));
-    g_assert_true(is_image_file(argv[4]));
+    g_assert_true(is_media_file(argv[4]));
     g_assert_null(video_load(&view, argv[4]));
     g_assert_true(c->audio_only);
     pump(400);
@@ -200,7 +200,7 @@ int main(int argc, char **argv) {
     g_assert_false(c->audio_only);
     canvas_clear_image(c);
     for (int i = 5; i < argc; i++) {
-        g_assert_true(is_image_file(argv[i]));
+        g_assert_true(is_media_file(argv[i]));
         if (is_video_ext(argv[i])) {
             g_assert_null(video_load(&view, argv[i]));
             for (int j = 0; !c->pixbuf && j < 500; j++) pump(10);

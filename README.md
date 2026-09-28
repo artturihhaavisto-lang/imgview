@@ -10,7 +10,8 @@ A lightweight native GTK image, video and audio viewer inspired by Photoshop, wi
 - **Audio files**: Play MP3, FLAC, WAV, Ogg, Opus, M4A, AAC and other common audio formats. Click the viewing area or press Space to pause/resume; use the timeline to seek and Ctrl+scroll for volume.
 - **Video progress bar**: Click or drag the timeline above the bottom info bar to jump to any point; seeking keeps the current play/pause state
 - **Pan**: Left-click and drag to pan across the image
-- **Efficient canvas movement**: Dragging redraws only the old/new media bounds, paced by GTK's display frame clock with no fixed FPS limit. Native Wayland is preferred for high-refresh monitors; XWayland can fall back to 60 Hz. Still images reuse a scaled RAM surface (at most 32 MiB) to avoid resampling each movement; oversized zooms and animated media use the original surface. No extra polling timer runs for panning.
+- **Efficient canvas movement**: Dragging redraws only the old/new media bounds, paced by GTK's display frame clock with no fixed FPS limit. Native Wayland is preferred for high-refresh monitors; XWayland can fall back to 60 Hz. Still images and videos reuse a scaled RAM surface (at most 32 MiB) to avoid resampling each movement. Video scaling runs in one background task at a time, allowing panel animations to continue between video frames; oversized zooms and GIFs use the original surface. No extra polling timer runs for panning.
+- **Fullscreen cursor**: Hides after three seconds without pointer movement and reappears when moved. Leaving fullscreen restores it.
 - **Click to pause**: Click the video to pause/resume; dragging pans without changing playback
 - **Custom header**: Matching dark title bar with filename and window controls
 - **Metadata**: Hover at the right edge to slide out file details, resolution and available media tags, duration, frame rate and codec information. Move away to hide it. Metadata and fullscreen hover controls animate without resizing the media.
@@ -19,7 +20,7 @@ A lightweight native GTK image, video and audio viewer inspired by Photoshop, wi
 - **Volume**: Ctrl+scroll adjusts volume in 2% steps up to 200%, with a persistent level bar in the bottom UI
 - Playback status, seeking and volume controls appear only for video/audio. Images and GIFs show filename, dimensions, index and zoom.
 - **More formats**: Image discovery automatically includes every installed GdkPixbuf decoder (including AVIF, HEIC/HEIF, JPEG XL, SVG/SVGZ, TGA, DDS, EXR, QOI and camera RAW when available). Video discovery also recognizes VOB, MXF, ASF, DV, 3G2, F4V, RealMedia, NUT, IVF and raw H.264/H.265 streams. Decoding depends on installed image loaders and GStreamer codecs.
-- **Zoom**: Scroll wheel to zoom in/out (centered on cursor)
+- **Zoom**: Scroll wheel to zoom in/out (centered on cursor), with a 120 ms eased transition paced by the display frame clock. Repeated input accumulates toward the requested zoom; reduced-motion settings disable the transition. Intermediate frames skip the scaled image cache, rebuilding it once zoom settles. Hover panels respond on the next display frame.
 - **Directory navigation**: Browse images in a folder
 - **Rotation & flip**: Rotate and flip images
 - **Fullscreen**: Press F or F11; Escape returns to windowed mode
@@ -118,8 +119,17 @@ Run `make test` to generate small media fixtures with FFmpeg and check playback,
 pause/seek/replay, transforms, GIF/image switching, and resource cleanup. Tests
 run without a display and use a silent audio sink. They require FFmpeg and the
 GStreamer codecs listed below.
-Run `make test-ui` with a display available to check the video progress bar;
-it briefly opens a muted test video and closes automatically.
+Run `make test-ui` with a display available to check the video progress bar,
+audio controls, and folder playlist. The test windows close automatically.
+To probe canvas frame pacing, build `make build/test-frame-clock` and run
+`./build/test-frame-clock` for panning or `./build/test-frame-clock --zoom` for
+zoom transitions. These probes require a display.
+For a live side/bottom panel pacing probe, build `make build/test-panels` and run
+`GDK_BACKEND=wayland ./build/test-panels /absolute/path/to/video.mp4`. It opens a
+brief fullscreen test, prints timing counters, and checks cancellation of video
+scaling work on close. Add `--paused` to compare against paused playback. The
+probe uses temporary window settings; observed frame rates depend on rendering
+load and the display backend.
 
 ## Requirements
 

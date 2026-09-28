@@ -70,7 +70,31 @@ static gboolean check(gpointer data) {
         toggle_fullscreen(view);
         break;
     }
-    case 4:
+    case 4: {
+        int cx = gtk_widget_get_allocated_width(view->window) / 2;
+        int cy = gtk_widget_get_allocated_height(view->window) / 2;
+        gint64 now = g_get_monotonic_time();
+        view->cursor_position_known = false;
+        cursor_poll(view, cx, cy, now);
+        cursor_poll(view, cx, cy, now + CURSOR_IDLE_US - 1);
+        g_assert_false(view->cursor_hidden);
+        cursor_poll(view, cx, cy, now + CURSOR_IDLE_US);
+        g_assert_true(view->cursor_hidden);
+        GdkWindow *window = gtk_widget_get_window(view->window);
+        g_assert_nonnull(gdk_window_get_cursor(window));
+        cursor_poll(view, cx + 1, cy, now + CURSOR_IDLE_US + 1);
+        g_assert_false(view->cursor_hidden); /* Consumed child motion fallback. */
+        cursor_poll(view, cx + 1, cy, now + 2 * CURSOR_IDLE_US + 1);
+        g_assert_true(view->cursor_hidden);
+        GdkEvent motion = {.type = GDK_MOTION_NOTIFY};
+        hover_motion(view->canvas.area, &motion, view);
+        g_assert_false(view->cursor_hidden); /* Immediate motion event. */
+        cursor_poll(view, cx + 1, cy, view->cursor_motion_time + CURSOR_IDLE_US);
+        g_assert_true(view->cursor_hidden);
+        toggle_fullscreen(view);
+        g_assert_false(view->cursor_hidden);
+        g_assert_null(gdk_window_get_cursor(window));
+        toggle_fullscreen(view);
         fullscreen_hover(view, 1, h / 2);
         g_assert_true(gtk_revealer_get_reveal_child(GTK_REVEALER(view->playlist_revealer)));
         for (guint i = 0; i < view->playlist_paths->len; i++) {
@@ -84,6 +108,7 @@ static gboolean check(gpointer data) {
         gtk_widget_destroy(view->window);
         g_print("PASS: folder playlist, image/video previews, selection, hover retention, fullscreen, unchanged canvas\n");
         return G_SOURCE_REMOVE;
+    }
     }
     return G_SOURCE_CONTINUE;
 }

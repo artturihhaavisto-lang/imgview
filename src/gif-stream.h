@@ -1,6 +1,12 @@
+#ifndef IMGVIEW_GIF_STREAM_H
+#define IMGVIEW_GIF_STREAM_H
+
 /* Incremental GIF decoding: one composited canvas and, only for disposal 3,
  * one saved canvas. No decoded-frame cache grows with animation length. */
+#include <gdk-pixbuf/gdk-pixbuf.h>
 #include <gif_lib.h>
+#include <stdbool.h>
+#include <string.h>
 #include <stdio.h>
 
 typedef struct {
@@ -154,3 +160,5 @@ static int gif_stream_next(GifStream *stream) {
         return 1;
     }
 }
+
+#endif /* IMGVIEW_GIF_STREAM_H */

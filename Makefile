@@ -8,8 +8,9 @@ CPPFLAGS += -DG_DISABLE_CAST_CHECKS
 LDFLAGS ?= -Wl,-O1,--as-needed
 WARNFLAGS ?= -Wall -Wextra -Wpedantic
 PACKAGES := gtk+-3.0 gstreamer-app-1.0 gstreamer-video-1.0
-GTK_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(PACKAGES))
-GTK_LIBS := $(shell $(PKG_CONFIG) --libs $(PACKAGES)) -lgif
+PKG_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(PACKAGES))
+PKG_LIBS := $(shell $(PKG_CONFIG) --libs $(PACKAGES))
+LDLIBS += -lgif -lm
 
 IMG_TARGET := build/imgview
 IMG_SRC := src/imgview.c
@@ -20,7 +21,7 @@ all: $(IMG_TARGET)
 
 $(IMG_TARGET): $(IMG_SRC) src/gif-stream.h
 	install -d "$(dir $@)"
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARNFLAGS) $(GTK_CFLAGS) -o $@ $< $(LDFLAGS) $(GTK_LIBS) -lm
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARNFLAGS) $(PKG_CFLAGS) -o $@ $< $(LDFLAGS) $(PKG_LIBS) $(LDLIBS)
 
 install: all
 	install -d "$(DESTDIR)$(BINDIR)"
@@ -28,6 +29,18 @@ install: all
 
 uninstall:
 	rm -f "$(DESTDIR)$(BINDIR)/imgview"
+
+# Most regression tests include the application implementation directly.
+APP_TESTS := canvas playback progress audio-ui playlist frame-clock panels
+APP_TEST_TARGETS := $(addprefix build/test-,$(APP_TESTS))
+
+$(APP_TEST_TARGETS): build/test-%: tests/%.c $(IMG_SRC) src/gif-stream.h
+	install -d "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARNFLAGS) $(PKG_CFLAGS) -o $@ $< $(LDFLAGS) $(PKG_LIBS) $(LDLIBS)
+
+build/test-gif: tests/gif-stream.c src/gif-stream.h
+	install -d "$(dir $@)"
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARNFLAGS) $(PKG_CFLAGS) -o $@ $< $(LDFLAGS) $(PKG_LIBS) $(LDLIBS)
 
 # Integration fixtures require ffmpeg; tests use real decoders without a GUI.
 build/test.mp4:
@@ -52,38 +65,10 @@ build/test.avif: build/test.png
 build/test.asf: build/test.mp4
 	ffmpeg -hide_banner -loglevel error -i $< -t 2 -an -c:v msmpeg4 -y $@
 
-build/test-playback: tests/playback.c $(IMG_SRC) src/gif-stream.h
-	install -d build
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARNFLAGS) $(GTK_CFLAGS) -o $@ $< $(LDFLAGS) $(GTK_LIBS) -lm
-
-build/test-gif: tests/gif-stream.c src/gif-stream.h
-	install -d build
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARNFLAGS) $(GTK_CFLAGS) -o $@ $< $(LDFLAGS) $(GTK_LIBS) -lm
-
-build/test-canvas: tests/canvas.c $(IMG_SRC) src/gif-stream.h
-	install -d build
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARNFLAGS) $(GTK_CFLAGS) -o $@ $< $(LDFLAGS) $(GTK_LIBS) -lm
-
-build/test-frame-clock: tests/frame-clock.c $(IMG_SRC) src/gif-stream.h
-	install -d build
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARNFLAGS) $(GTK_CFLAGS) -o $@ $< $(LDFLAGS) $(GTK_LIBS) -lm
-
 test: build/test-canvas build/test-gif build/test-playback build/test.mp4 build/test.gif build/test.png build/test.wav build/test.webp build/test.asf
 	./build/test-canvas
 	./build/test-gif
 	./build/test-playback build/test.mp4 build/test.gif build/test.png build/test.wav build/test.webp tests/format.svg build/test.asf
-
-build/test-progress: tests/progress.c $(IMG_SRC) src/gif-stream.h
-	install -d build
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARNFLAGS) $(GTK_CFLAGS) -o $@ $< $(LDFLAGS) $(GTK_LIBS) -lm
-
-build/test-audio-ui: tests/audio-ui.c $(IMG_SRC) src/gif-stream.h
-	install -d build
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARNFLAGS) $(GTK_CFLAGS) -o $@ $< $(LDFLAGS) $(GTK_LIBS) -lm
-
-build/test-playlist: tests/playlist.c $(IMG_SRC) src/gif-stream.h
-	install -d build
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARNFLAGS) $(GTK_CFLAGS) -o $@ $< $(LDFLAGS) $(GTK_LIBS) -lm
 
 test-ui: build/test-progress build/test-audio-ui build/test-playlist build/test.mp4 build/test.png build/test.webp build/test.wav
 	./build/test-progress build/test.mp4 build/test.webp

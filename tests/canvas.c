@@ -29,6 +29,21 @@ static double benchmark(Canvas *c, cairo_t *cr) {
 }
 
 int main(void) {
+    /* Equal elapsed time gives equal zoom and cursor anchoring regardless
+     * of how many display ticks occurred; late ticks finish exactly. */
+    const int rates[] = {60, 144, 240};
+    for (guint r = 0; r < G_N_ELEMENTS(rates); r++) {
+        Canvas z = {.zoom_from = 0.5, .zoom_target = 2.0, .zoom_start = 1000000,
+            .zoom_cx = 400, .zoom_cy = 300, .zoom_ix = 120, .zoom_iy = 80};
+        for (gint64 elapsed = 0; elapsed < 60000; elapsed += 1000000 / rates[r])
+            g_assert_true(canvas_zoom_at(&z, z.zoom_start + elapsed));
+        g_assert_true(canvas_zoom_at(&z, z.zoom_start + 60000));
+        g_assert_cmpfloat_with_epsilon(z.zoom, exp(log(0.5) + log(4.0) * 0.875), 1e-12);
+        g_assert_cmpfloat_with_epsilon((400 - z.ox) / z.zoom, 120, 1e-12);
+        g_assert_cmpfloat_with_epsilon((300 - z.oy) / z.zoom, 80, 1e-12);
+        g_assert_false(canvas_zoom_at(&z, z.zoom_start + 200000));
+        g_assert_cmpfloat(z.zoom, ==, 2.0);
+    }
     Canvas c = {0};
     c.pixbuf = gdk_pixbuf_new(GDK_COLORSPACE_RGB, TRUE, 8, 3840, 2160);
     gdk_pixbuf_fill(c.pixbuf, 0x789abcff);
@@ -60,9 +75,16 @@ int main(void) {
     cairo_t *cr = cairo_create(target);
     double fast = benchmark(&c, cr);
     g_clear_pointer(&c.scaled_surface, cairo_surface_destroy);
-    c.player = (GstElement *)&c; /* Select uncached path; never dereferenced. */
+    c.zoom_id = 1; /* Intermediate zoom frames deliberately skip caching. */
     double original = benchmark(&c, cr);
     g_assert_null(c.scaled_surface);
+    c.zoom_id = 0;
+    c.player = (GstElement *)&c; /* Video frames also reuse the scaled surface. */
+    canvas_prepare_scaled(&c, 1);
+    g_assert_nonnull(c.scaled_surface);
+    cached = c.scaled_surface;
+    canvas_prepare_scaled(&c, 1);
+    g_assert_true(cached == c.scaled_surface);
     c.player = NULL;
     c.zoom = 32;
     canvas_prepare_scaled(&c, 1);

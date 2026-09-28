@@ -17,6 +17,7 @@
 #define DRAG_THRESHOLD 5.0
 #define VOLUME_MAX 2.0
 #define VOLUME_STEP 0.02
+#define CURSOR_IDLE_US (3 * G_USEC_PER_SEC)
 
 static const char *CSS =
     "window { background: #0e0e0e; }"
@@ -65,10 +66,12 @@ static const char *CSS =
     "#st-index { color: #555; }"
     "#st-dims { color: #666; }"
     "#st-zoom { color: #888; min-width: 34px; }"
-    "#video-progress { padding: 3px 0; min-height: 6px; }"
+    "#video-progress { padding: 3px 0; min-height: 12px; }"
+    "#statusbar #playback-time { min-height: 18px; font-size: 11px; }"
     "#video-progress trough, #video-progress highlight, #video-progress slider {"
     "  background-image: none; border: none; box-shadow: none;"
-    "  outline: none; border-radius: 0;"
+    "  outline: none; border-radius: 3px;"
+    "  transition: min-height 160ms ease-out, min-width 160ms ease-out, background-color 160ms ease-out;"
     "}"
     "#video-progress trough { min-height: 2px; background-color: #282828; }"
     "#video-progress highlight { min-height: 2px; background-color: #777; }"
@@ -76,6 +79,9 @@ static const char *CSS =
     "  min-width: 6px; min-height: 6px; margin: -2px 0; background-color: #999;"
     "}"
     "#video-progress:hover highlight { background-color: #999; }"
+    "#statusbar.timeline-active #video-progress trough { min-height: 5px; }"
+    "#statusbar.timeline-active #video-progress highlight { min-height: 5px; background-color: #bbb; }"
+    "#statusbar.timeline-active #video-progress slider { min-width: 10px; min-height: 10px; background-color: #ddd; }"
     "#video-progress slider:hover, #video-progress slider:active { background-color: #ccc; }"
     "#video-progress:disabled highlight, #video-progress:disabled slider { background-color: #444; }";
 
@@ -94,6 +100,13 @@ typedef struct {
     GstBus *video_bus;
     GdkPixbuf *video_frame;
     guint video_id;
+    bool video_frame_clock;
+    gint64 video_status_time;
+    gint64 progress_time, progress_sample_time;
+    double progress_position, progress_correction;
+    GCancellable *video_scale_cancel;
+    bool video_scale_busy;
+    GdkPixbuf *video_scaled_frame;
     bool paused;
     bool ended;
     bool muted;
@@ -107,6 +120,11 @@ typedef struct {
     int scaled_device_scale;
     cairo_pattern_t *checker_pattern;
     double zoom;
+    guint zoom_id;
+    gint64 zoom_start;
+    double zoom_from, zoom_target;
+    double zoom_cx, zoom_cy, zoom_ix, zoom_iy;
+    GtkWidget *zoom_label;
     double video_fit_scale;
     double ox;
     double oy;
@@ -129,6 +147,7 @@ typedef struct {
     GtkWidget *volume_level;
     GtkWidget *volume_box;
     bool scrubbing;
+    bool progress_hovered;
     GtkWidget *box;
 } StatusBar;
 
@@ -150,6 +169,10 @@ typedef struct {
     GtkWidget *content_box;
     GtkWidget *status_host;
     guint hover_id;
+    guint hover_frame_id;
+    gint64 cursor_motion_time;
+    int cursor_x, cursor_y;
+    bool cursor_position_known, cursor_hidden;
     bool windowed_status_visible;
     Canvas canvas;
     StatusBar status;
@@ -170,50 +193,50 @@ typedef struct {
 } ImgView;
 
 static void playlist_refresh(ImgView *view);
+static gboolean hover_motion(GtkWidget *widget, GdkEvent *event, gpointer data);
 static void playlist_thumbnails(ImgView *view);
+
+static bool extension_matches(const char *ext, const char *const *extensions) {
+    if (!ext) return false;
+    for (int i = 0; extensions[i]; i++) {
+        if (g_ascii_strcasecmp(ext, extensions[i]) == 0) return true;
+    }
+    return false;
+}
 
 static bool is_video_ext(const char *path) {
     const char *ext = strrchr(path, '.');
-    static const char *exts[] = {
+    static const char *const exts[] = {
         ".mp4", ".m4v", ".mkv", ".webm", ".mov", ".avi", ".ogv",
         ".mpeg", ".mpg", ".m2v", ".ts", ".mts", ".m2ts", ".wmv", ".flv", ".3gp",
         ".mpe", ".m1v", ".m2p", ".m2t", ".vob", ".mxf", ".asf", ".f4v",
         ".3g2", ".divx", ".qt", ".rm", ".rmvb", ".dv", ".nut", ".ivf",
         ".h264", ".264", ".h265", ".265", ".hevc", ".av1", NULL
     };
-    for (int i = 0; ext && exts[i]; i++) {
-        if (g_ascii_strcasecmp(ext, exts[i]) == 0) return true;
-    }
-    return false;
+    return extension_matches(ext, exts);
 }
 
 static bool is_audio_ext(const char *path) {
     const char *ext = strrchr(path, '.');
-    const char *exts[] = {".mp3", ".flac", ".wav", ".ogg", ".oga", ".opus",
+    static const char *const exts[] = {".mp3", ".flac", ".wav", ".ogg", ".oga", ".opus",
         ".m4a", ".aac", ".aiff", ".aif", ".wma", ".alac", ".ape", NULL};
-    for (int i = 0; ext && exts[i]; i++)
-        if (!g_ascii_strcasecmp(ext, exts[i])) return true;
-    return false;
+    return extension_matches(ext, exts);
 }
 
-static bool is_image_ext(const char *path) {
+static bool is_media_ext(const char *path) {
     if (is_video_ext(path) || is_audio_ext(path)) return true;
     const char *ext = strrchr(path, '.');
     if (!ext) {
         return false;
     }
 
-    static const char *exts[] = {
+    static const char *const exts[] = {
         ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
         ".tiff", ".tif", ".ico", ".xpm", ".ppm", ".pgm", ".pbm",
         NULL
     };
 
-    for (int i = 0; exts[i]; i++) {
-        if (g_ascii_strcasecmp(ext, exts[i]) == 0) {
-            return true;
-        }
-    }
+    if (extension_matches(ext, exts)) return true;
     /* Include every format provided by the system's image loaders. Cache the
      * extension set once so directory scanning stays cheap. */
     static gsize supported_extensions;
@@ -241,8 +264,8 @@ static bool is_image_ext(const char *path) {
     return false;
 }
 
-static bool is_image_file(const char *path) {
-    return is_image_ext(path) && g_file_test(path, G_FILE_TEST_IS_REGULAR);
+static bool is_media_file(const char *path) {
+    return is_media_ext(path) && g_file_test(path, G_FILE_TEST_IS_REGULAR);
 }
 
 static const char *path_basename_ptr(const char *path) {
@@ -260,7 +283,7 @@ static GPtrArray *new_path_array(void) {
     return g_ptr_array_new_with_free_func(g_free);
 }
 
-static void add_dir_images(GPtrArray *paths, const char *dir) {
+static void add_dir_media(GPtrArray *paths, const char *dir) {
     GDir *gdir = g_dir_open(dir, 0, NULL);
     if (!gdir) {
         return;
@@ -268,7 +291,7 @@ static void add_dir_images(GPtrArray *paths, const char *dir) {
 
     const char *name = NULL;
     while ((name = g_dir_read_name(gdir)) != NULL) {
-        if (!is_image_ext(name)) {
+        if (!is_media_ext(name)) {
             continue;
         }
         char *path = g_build_filename(dir, name, NULL);
@@ -303,13 +326,13 @@ static void resolve_args(
     if (argc == 2) {
         char *abs = g_canonicalize_filename(argv[1], NULL);
         if (g_file_test(abs, G_FILE_TEST_IS_DIR)) {
-            add_dir_images(paths, abs);
+            add_dir_media(paths, abs);
             g_free(abs);
             *out_paths = paths;
             return;
         }
 
-        if (is_image_file(abs)) {
+        if (is_media_file(abs)) {
             *out_pending_scan_dir = g_path_get_dirname(abs);
             *out_pending_scan_path = g_strdup(abs);
             g_ptr_array_add(paths, abs);
@@ -322,9 +345,9 @@ static void resolve_args(
     for (int i = 1; i < argc; i++) {
         char *abs = g_canonicalize_filename(argv[i], NULL);
         if (g_file_test(abs, G_FILE_TEST_IS_DIR)) {
-            add_dir_images(paths, abs);
+            add_dir_media(paths, abs);
             g_free(abs);
-        } else if (is_image_file(abs)) {
+        } else if (is_media_file(abs)) {
             g_ptr_array_add(paths, abs);
         } else {
             g_free(abs);
@@ -367,13 +390,31 @@ static cairo_pattern_t *create_checker_pattern(void) {
     return pattern;
 }
 
+static void canvas_stop_zoom(Canvas *canvas) {
+    if (canvas->zoom_id) {
+        gtk_widget_remove_tick_callback(canvas->area, canvas->zoom_id);
+        canvas->zoom_id = 0;
+    }
+}
+
 static void canvas_clear_image(Canvas *canvas) {
+    canvas_stop_zoom(canvas);
+    if (canvas->video_scale_cancel) g_cancellable_cancel(canvas->video_scale_cancel);
+    g_clear_object(&canvas->video_scale_cancel);
+    g_clear_object(&canvas->video_scaled_frame);
+    canvas->video_scale_busy = false;
     canvas->dragging = false;
     canvas->drag_moved = false;
     if (canvas->video_id) {
-        g_source_remove(canvas->video_id);
+        if (canvas->video_frame_clock)
+            gtk_widget_remove_tick_callback(canvas->area, canvas->video_id);
+        else g_source_remove(canvas->video_id);
         canvas->video_id = 0;
     }
+    canvas->video_frame_clock = false;
+    canvas->video_status_time = 0;
+    canvas->progress_time = canvas->progress_sample_time = 0;
+    canvas->progress_position = canvas->progress_correction = 0;
     if (canvas->player) gst_element_set_state(canvas->player, GST_STATE_NULL);
     g_clear_object(&canvas->video_bus);
     g_clear_object(&canvas->player);
@@ -400,7 +441,9 @@ static void canvas_clear_image(Canvas *canvas) {
 }
 
 static void canvas_update_surface(Canvas *canvas) {
-    g_clear_pointer(&canvas->scaled_surface, cairo_surface_destroy);
+    /* Keep the last prepared video frame visible while its replacement is
+     * scaled off-thread. Static/GIF surfaces still invalidate immediately. */
+    if (!canvas->player) g_clear_pointer(&canvas->scaled_surface, cairo_surface_destroy);
     g_clear_pointer(&canvas->image_surface, cairo_surface_destroy);
     if (!canvas->pixbuf) {
         return;
@@ -411,6 +454,7 @@ static void canvas_update_surface(Canvas *canvas) {
 }
 
 static void canvas_fit(Canvas *canvas, bool force) {
+    canvas_stop_zoom(canvas);
     if (!canvas->pixbuf) {
         return;
     }
@@ -538,12 +582,39 @@ static void canvas_actual_size(Canvas *canvas) {
         return;
     }
 
+    canvas_stop_zoom(canvas);
     GtkAllocation alloc;
     gtk_widget_get_allocation(canvas->area, &alloc);
     canvas->zoom = 1.0;
     canvas->ox = (alloc.width - gdk_pixbuf_get_width(canvas->pixbuf)) / 2.0;
     canvas->oy = (alloc.height - gdk_pixbuf_get_height(canvas->pixbuf)) / 2.0;
     gtk_widget_queue_draw(canvas->area);
+}
+
+/* Use elapsed frame-clock time, so duration is the same at 60/144/240 Hz
+ * and after a missed frame. Keep source coordinates under the cursor fixed. */
+static bool canvas_zoom_at(Canvas *canvas, gint64 now) {
+    double t = clamp_double((now - canvas->zoom_start) / 120000.0, 0.0, 1.0);
+    double eased = 1.0 - pow(1.0 - t, 3.0);
+    canvas->zoom = exp(log(canvas->zoom_from) +
+        (log(canvas->zoom_target) - log(canvas->zoom_from)) * eased);
+    if (t >= 1.0) canvas->zoom = canvas->zoom_target;
+    canvas->ox = canvas->zoom_cx - canvas->zoom_ix * canvas->zoom;
+    canvas->oy = canvas->zoom_cy - canvas->zoom_iy * canvas->zoom;
+    return t < 1.0;
+}
+
+static gboolean canvas_zoom_tick(GtkWidget *widget, GdkFrameClock *clock, gpointer data) {
+    Canvas *canvas = data;
+    bool running = canvas_zoom_at(canvas, gdk_frame_clock_get_frame_time(clock));
+    if (!running) canvas->zoom_id = 0;
+    if (canvas->zoom_label) {
+        char *label = g_strdup_printf("%.0f%%", canvas->zoom * 100.0);
+        gtk_label_set_text(GTK_LABEL(canvas->zoom_label), label);
+        g_free(label);
+    }
+    gtk_widget_queue_draw(widget);
+    return running ? G_SOURCE_CONTINUE : G_SOURCE_REMOVE;
 }
 
 static void canvas_zoom_step(Canvas *canvas, double factor, double cx, double cy) {
@@ -561,11 +632,26 @@ static void canvas_zoom_step(Canvas *canvas, double factor, double cx, double cy
         cy = alloc.height / 2.0;
     }
 
-    double ix = (cx - canvas->ox) / canvas->zoom;
-    double iy = (cy - canvas->oy) / canvas->zoom;
-    canvas->zoom = clamp_double(canvas->zoom * factor, ZOOM_MIN, ZOOM_MAX);
-    canvas->ox = cx - ix * canvas->zoom;
-    canvas->oy = cy - iy * canvas->zoom;
+    double target = clamp_double((canvas->zoom_id ? canvas->zoom_target : canvas->zoom)
+        * factor, ZOOM_MIN, ZOOM_MAX);
+    if (target == (canvas->zoom_id ? canvas->zoom_target : canvas->zoom)) return;
+    gboolean animations = TRUE;
+    if (canvas->area)
+        g_object_get(gtk_widget_get_settings(canvas->area), "gtk-enable-animations", &animations, NULL);
+    canvas->zoom_from = canvas->zoom;
+    canvas->zoom_target = target;
+    canvas->zoom_cx = cx;
+    canvas->zoom_cy = cy;
+    canvas->zoom_ix = (cx - canvas->ox) / canvas->zoom;
+    canvas->zoom_iy = (cy - canvas->oy) / canvas->zoom;
+    GdkFrameClock *clock = canvas->area ? gtk_widget_get_frame_clock(canvas->area) : NULL;
+    canvas->zoom_start = clock ? gdk_frame_clock_get_frame_time(clock) : 0;
+    if (!animations || !clock || canvas->dragging) {
+        canvas_stop_zoom(canvas);
+        canvas_zoom_at(canvas, canvas->zoom_start + 120000);
+    } else if (!canvas->zoom_id) {
+        canvas->zoom_id = gtk_widget_add_tick_callback(canvas->area, canvas_zoom_tick, canvas, NULL);
+    }
     gtk_widget_queue_draw(canvas->area);
 }
 
@@ -590,18 +676,105 @@ static void canvas_flip_h(Canvas *canvas) {
     canvas_update_frame(canvas);
 }
 
-/* Resample still images once per zoom level, then pan with pixel-aligned
- * copies. Bound the extra RAM to 32 MiB; very large zooms use the clipped
- * original surface instead. Animated media never builds this extra copy. */
+typedef struct {
+    Canvas *canvas;
+    GdkPixbuf *frame;
+    double zoom;
+    int device_scale, width, height, rotation;
+    bool flipped;
+} VideoScale;
+
+static void video_scale_free(gpointer data) {
+    VideoScale *job = data;
+    g_object_unref(job->frame);
+    g_free(job);
+}
+
+static void video_scale_worker(GTask *task, gpointer source, gpointer data, GCancellable *cancel) {
+    (void)source;
+    VideoScale *job = data;
+    if (g_task_return_error_if_cancelled(task)) return;
+    GdkPixbuf *scaled = gdk_pixbuf_scale_simple(job->frame, job->width, job->height, GDK_INTERP_BILINEAR);
+    if (g_cancellable_is_cancelled(cancel)) {
+        g_clear_object(&scaled);
+        g_task_return_error_if_cancelled(task);
+        return;
+    }
+    g_task_return_pointer(task, scaled, scaled ? g_object_unref : NULL);
+}
+
+static void video_scale_done(GObject *source, GAsyncResult *result, gpointer data) {
+    (void)data;
+    GTask *task = G_TASK(result);
+    VideoScale *job = g_task_get_task_data(task);
+    GdkPixbuf *scaled = g_task_propagate_pointer(task, NULL);
+    /* Cancellation is checked before accessing Canvas: closing the window
+     * or switching media may already have freed it or started a new job. */
+    if (g_cancellable_is_cancelled(g_task_get_cancellable(task))) {
+        g_clear_object(&scaled);
+        return;
+    }
+    Canvas *canvas = job->canvas;
+    canvas->video_scale_busy = false;
+    if (scaled && canvas->zoom == job->zoom && !canvas->zoom_id &&
+        canvas->rotation == job->rotation && canvas->flipped == job->flipped &&
+        gtk_widget_get_scale_factor(GTK_WIDGET(source)) == job->device_scale) {
+        cairo_surface_t *surface = gdk_cairo_surface_create_from_pixbuf(scaled, 1,
+            gtk_widget_get_window(GTK_WIDGET(source)));
+        if (surface && cairo_surface_status(surface) == CAIRO_STATUS_SUCCESS) {
+            cairo_surface_set_device_scale(surface, job->device_scale, job->device_scale);
+            g_clear_pointer(&canvas->scaled_surface, cairo_surface_destroy);
+            canvas->scaled_surface = surface;
+            canvas->scaled_zoom = job->zoom;
+            canvas->scaled_device_scale = job->device_scale;
+            gtk_widget_queue_draw(canvas->area);
+        } else if (surface) cairo_surface_destroy(surface);
+    }
+    g_clear_object(&scaled);
+}
+
+static void canvas_scale_video(Canvas *canvas, int device_scale, int width, int height) {
+    if (canvas->scaled_zoom != canvas->zoom || canvas->scaled_device_scale != device_scale)
+        g_clear_pointer(&canvas->scaled_surface, cairo_surface_destroy);
+    if (canvas->video_scale_busy ||
+        (canvas->scaled_surface && canvas->video_scaled_frame == canvas->pixbuf)) return;
+    /* Only one task runs; newer frames replace the pending source implicitly
+     * in canvas->pixbuf, so decoder/render backlogs cannot grow. */
+    if (!canvas->video_scale_cancel) canvas->video_scale_cancel = g_cancellable_new();
+    VideoScale *job = g_new0(VideoScale, 1);
+    *job = (VideoScale){canvas, g_object_ref(canvas->pixbuf), canvas->zoom,
+        device_scale, width, height, canvas->rotation, canvas->flipped};
+    g_set_object(&canvas->video_scaled_frame, canvas->pixbuf);
+    canvas->video_scale_busy = true;
+    GTask *task = g_task_new(canvas->area, canvas->video_scale_cancel, video_scale_done, NULL);
+    g_task_set_task_data(task, job, video_scale_free);
+    g_task_run_in_thread(task, video_scale_worker);
+    g_object_unref(task);
+}
+
+/* Resample once per source frame/zoom level, then paint pixel-aligned
+ * copies. Panel animations can repaint a video many times before its next
+ * frame: do not repeat full-screen bilinear scaling on every display tick.
+ * Bound the extra RAM to 32 MiB; oversized zooms use the clipped original. */
 static void canvas_prepare_scaled(Canvas *canvas, int device_scale) {
-    if (canvas->scaled_surface && canvas->scaled_zoom == canvas->zoom &&
+    if ((!canvas->player || !canvas->area) && canvas->scaled_surface && canvas->scaled_zoom == canvas->zoom &&
         canvas->scaled_device_scale == device_scale) return;
-    g_clear_pointer(&canvas->scaled_surface, cairo_surface_destroy);
-    if (!canvas->image_surface || canvas->player || canvas->gif_stream ||
-        canvas->animation_iter || canvas->zoom * device_scale == 1.0) return;
+    if (!canvas->player) g_clear_pointer(&canvas->scaled_surface, cairo_surface_destroy);
+    if (canvas->zoom_id || !canvas->image_surface || canvas->gif_stream ||
+        canvas->animation_iter || canvas->zoom * device_scale == 1.0) {
+        g_clear_pointer(&canvas->scaled_surface, cairo_surface_destroy);
+        return;
+    }
     double w = ceil(gdk_pixbuf_get_width(canvas->pixbuf) * canvas->zoom * device_scale);
     double h = ceil(gdk_pixbuf_get_height(canvas->pixbuf) * canvas->zoom * device_scale);
-    if (w < 1 || h < 1 || w * h > 8 * 1024 * 1024) return;
+    if (w < 1 || h < 1 || w * h > 8 * 1024 * 1024) {
+        g_clear_pointer(&canvas->scaled_surface, cairo_surface_destroy);
+        return;
+    }
+    if (canvas->player && canvas->area) {
+        canvas_scale_video(canvas, device_scale, (int)w, (int)h);
+        return;
+    }
     cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, (int)w, (int)h);
     if (cairo_surface_status(surface) != CAIRO_STATUS_SUCCESS) {
         cairo_surface_destroy(surface);
@@ -705,6 +878,7 @@ static gboolean canvas_button_press(GtkWidget *widget, GdkEventButton *event, gp
     (void)widget;
     Canvas *canvas = data;
     if (event->button == 1) {
+        canvas_stop_zoom(canvas);
         canvas->dragging = true;
         canvas->drag_moved = false;
         canvas->drag_x = event->x;
@@ -749,9 +923,7 @@ static void status_update(ImgView *view, const char *path, const char *error) {
         g_free(text);
     } else {
         if (path) {
-            char *base = g_path_get_basename(path);
-            gtk_label_set_text(GTK_LABEL(view->status.name), base);
-            g_free(base);
+            gtk_label_set_text(GTK_LABEL(view->status.name), "");
         }
         if (pixbuf) {
             char *dims = g_strdup_printf("%dx%d", gdk_pixbuf_get_width(pixbuf), gdk_pixbuf_get_height(pixbuf));
@@ -856,12 +1028,30 @@ static void canvas_init(Canvas *canvas, ImgView *view) {
     g_signal_connect(canvas->area, "draw", G_CALLBACK(canvas_draw), canvas);
     g_signal_connect(canvas->area, "button-press-event", G_CALLBACK(canvas_button_press), canvas);
     g_signal_connect(canvas->area, "button-release-event", G_CALLBACK(canvas_button_release), canvas);
+    g_signal_connect(canvas->area, "motion-notify-event", G_CALLBACK(hover_motion), view);
     g_signal_connect(canvas->area, "motion-notify-event", G_CALLBACK(canvas_motion), canvas);
     g_signal_connect(canvas->area, "scroll-event", G_CALLBACK(canvas_scroll), view);
     g_signal_connect(canvas->area, "configure-event", G_CALLBACK(canvas_configure), view);
 }
 
 static gboolean video_seek_to(Canvas *canvas, gint64 position);
+
+static void progress_update_active(StatusBar *status) {
+    if (!status->box) return;
+    GtkStyleContext *context = gtk_widget_get_style_context(status->box);
+    if (status->scrubbing || status->progress_hovered)
+        gtk_style_context_add_class(context, "timeline-active");
+    else
+        gtk_style_context_remove_class(context, "timeline-active");
+}
+
+static gboolean progress_crossing(GtkWidget *widget, GdkEventCrossing *event, gpointer data) {
+    (void)widget;
+    ImgView *view = data;
+    view->status.progress_hovered = event->type == GDK_ENTER_NOTIFY;
+    progress_update_active(&view->status);
+    return FALSE;
+}
 
 static gboolean progress_change(GtkRange *range, GtkScrollType scroll, double value, gpointer data) {
     (void)range;
@@ -886,12 +1076,14 @@ static void progress_set_pointer(ImgView *view, double x) {
     double lower = gtk_adjustment_get_lower(adjustment);
     double upper = gtk_adjustment_get_upper(adjustment);
     gtk_range_set_value(range, lower + fraction * (upper - lower));
+
 }
 
 static void progress_drag_begin(GtkGestureDrag *gesture, double x, double y, gpointer data) {
     (void)y;
     ImgView *view = data;
     view->status.scrubbing = true;
+    progress_update_active(&view->status);
     gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
     progress_set_pointer(view, x);
 }
@@ -908,6 +1100,7 @@ static void progress_drag_end(GtkGestureDrag *gesture, double dx, double dy, gpo
     if (view->status.scrubbing) {
         progress_drag_update(gesture, dx, dy, data);
         view->status.scrubbing = false;
+        progress_update_active(&view->status);
         video_seek_to(&view->canvas,
             (gint64)(gtk_range_get_value(GTK_RANGE(view->status.progress)) * GST_SECOND));
     }
@@ -918,10 +1111,13 @@ static void progress_drag_cancel(GtkGesture *gesture, GdkEventSequence *sequence
     (void)sequence;
     ImgView *view = data;
     view->status.scrubbing = false;
+    progress_update_active(&view->status);
 }
 
 static void progress_reset(StatusBar *status) {
     status->scrubbing = false;
+    status->progress_hovered = false;
+    progress_update_active(status);
     if (!status->progress) return;
     gtk_range_set_value(GTK_RANGE(status->progress), 0);
     gtk_widget_set_sensitive(status->progress, FALSE);
@@ -936,10 +1132,14 @@ static void status_init(ImgView *view) {
     status->progress = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 1, 0.1);
     gtk_widget_set_name(status->progress, "video-progress");
     gtk_scale_set_draw_value(GTK_SCALE(status->progress), FALSE);
+    gtk_range_set_round_digits(GTK_RANGE(status->progress), -1);
     gtk_widget_set_can_focus(status->progress, FALSE);
     gtk_widget_set_no_show_all(status->progress, TRUE);
     g_signal_connect(status->progress, "change-value", G_CALLBACK(progress_change), view);
     g_signal_connect(status->progress, "scroll-event", G_CALLBACK(volume_scroll), view);
+    gtk_widget_add_events(status->progress, GDK_ENTER_NOTIFY_MASK | GDK_LEAVE_NOTIFY_MASK);
+    g_signal_connect(status->progress, "enter-notify-event", G_CALLBACK(progress_crossing), view);
+    g_signal_connect(status->progress, "leave-notify-event", G_CALLBACK(progress_crossing), view);
     GtkGesture *drag = gtk_gesture_drag_new(status->progress);
     gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(drag), 1);
     gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(drag), GTK_PHASE_CAPTURE);
@@ -955,7 +1155,9 @@ static void status_init(ImgView *view) {
     status->index = gtk_label_new("");
     status->dims = gtk_label_new("");
     status->zoom = gtk_label_new("");
+    view->canvas.zoom_label = status->zoom;
     status->playback = gtk_label_new("");
+    gtk_widget_set_name(status->playback, "playback-time");
     gtk_widget_set_no_show_all(status->playback, TRUE);
     GtkWidget *volume_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 5);
     status->volume_box = volume_box;
@@ -1006,11 +1208,12 @@ static void video_update_status(ImgView *view) {
         if (!view->status.scrubbing) {
             gtk_range_set_range(GTK_RANGE(view->status.progress), 0,
                 duration > 0 ? (double)duration / GST_SECOND : 1);
-            gtk_range_set_value(GTK_RANGE(view->status.progress),
-                canvas->ended && duration > 0 ? (double)duration / GST_SECOND :
-                (double)MAX(position, 0) / GST_SECOND);
+            if (canvas->ended && duration > 0)
+                gtk_range_set_value(GTK_RANGE(view->status.progress), (double)duration / GST_SECOND);
         }
     }
+    if (view->status.scrubbing)
+        position = (gint64)(gtk_range_get_value(GTK_RANGE(view->status.progress)) * GST_SECOND);
     position = MAX(position, 0) / GST_SECOND;
     duration = MAX(duration, 0) / GST_SECOND;
     char *text = g_strdup_printf("%s %" G_GINT64_FORMAT ":%02" G_GINT64_FORMAT
@@ -1021,6 +1224,39 @@ static void video_update_status(ImgView *view) {
     if (g_strcmp0(gtk_label_get_text(GTK_LABEL(view->status.playback)), text) != 0)
         gtk_label_set_text(GTK_LABEL(view->status.playback), text);
     g_free(text);
+}
+
+/* Advance at one media second per real second. Corrections and seeks blend
+ * from the current visual position rather than snapping the slider. */
+static double video_progress_position(Canvas *canvas, gint64 now) {
+    double elapsed = MAX(now - canvas->progress_time, 0) / 1000000.0;
+    double blend = 1.0 - clamp_double(elapsed / 0.2, 0, 1);
+    blend = blend * blend * (3.0 - 2.0 * blend);
+    return canvas->progress_position + (canvas->paused ? 0 : elapsed)
+        + canvas->progress_correction * blend;
+}
+
+static void video_progress_anchor(Canvas *canvas, double position, gint64 now) {
+    double previous = canvas->progress_time ? video_progress_position(canvas, now) : position;
+    canvas->progress_position = position;
+    canvas->progress_correction = previous - position;
+    canvas->progress_time = now;
+    canvas->progress_sample_time = now;
+}
+
+static void video_update_progress(ImgView *view) {
+    Canvas *canvas = &view->canvas;
+    if (!view->status.progress || view->status.scrubbing || canvas->ended) return;
+    gint64 now = g_get_monotonic_time();
+    if (!canvas->progress_time || now - canvas->progress_sample_time >= G_USEC_PER_SEC) {
+        gint64 position;
+        GstState state;
+        if (gst_element_get_state(canvas->player, &state, NULL, 0) == GST_STATE_CHANGE_SUCCESS &&
+            gst_element_query_position(canvas->player, GST_FORMAT_TIME, &position))
+            video_progress_anchor(canvas, (double)MAX(position, 0) / GST_SECOND, now);
+    }
+    if (canvas->progress_time)
+        gtk_range_set_value(GTK_RANGE(view->status.progress), video_progress_position(canvas, now));
 }
 
 static void metadata_update(ImgView *view) {
@@ -1103,6 +1339,54 @@ static void video_pixels_release(guchar *pixels, gpointer data) {
     g_free(owner);
 }
 
+/* Keep the decoder buffer mapped until the pixbuf's last reference is
+ * released. The caller retains ownership of its sample reference. */
+static GdkPixbuf *video_sample_pixbuf(GstSample *sample, double *fps) {
+    GstVideoInfo info;
+    if (!gst_video_info_from_caps(&info, gst_sample_get_caps(sample))) return NULL;
+    VideoPixels *owner = g_new0(VideoPixels, 1);
+    if (!gst_video_frame_map(&owner->frame, &info, gst_sample_get_buffer(sample), GST_MAP_READ)) {
+        g_free(owner);
+        return NULL;
+    }
+    if (fps && GST_VIDEO_INFO_FPS_D(&info) > 0)
+        *fps = (double)GST_VIDEO_INFO_FPS_N(&info) / GST_VIDEO_INFO_FPS_D(&info);
+    owner->sample = gst_sample_ref(sample);
+    GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data(
+        GST_VIDEO_FRAME_PLANE_DATA(&owner->frame, 0), GDK_COLORSPACE_RGB, FALSE, 8,
+        GST_VIDEO_INFO_WIDTH(&info), GST_VIDEO_INFO_HEIGHT(&info),
+        GST_VIDEO_FRAME_PLANE_STRIDE(&owner->frame, 0), video_pixels_release, owner);
+    if (!pixbuf) video_pixels_release(NULL, owner);
+    return pixbuf;
+}
+
+static void video_receive_frame(ImgView *view) {
+    Canvas *canvas = &view->canvas;
+    GstAppSink *sink = GST_APP_SINK(canvas->video_sink);
+    GstSample *preroll = gst_app_sink_try_pull_preroll(sink, 0);
+    GstSample *sample = gst_app_sink_try_pull_sample(sink, 0);
+    if (!sample && canvas->paused && !canvas->ended) {
+        sample = preroll;
+        preroll = NULL;
+    }
+    if (preroll) gst_sample_unref(preroll);
+    if (!sample) return;
+
+    GdkPixbuf *pixbuf = video_sample_pixbuf(sample, &canvas->video_fps);
+    gst_sample_unref(sample);
+    if (!pixbuf) return;
+
+    bool first = !canvas->video_frame;
+    g_clear_object(&canvas->video_frame);
+    canvas->video_frame = pixbuf;
+    canvas_update_frame(canvas);
+    if (first) {
+        canvas_fit(canvas, true);
+        status_update(view, NULL, NULL);
+        metadata_update(view);
+    }
+}
+
 /* Pull frames on the GTK thread; the bounded sink queue drops stale frames
  * when drawing cannot keep up, while GStreamer maintains audio/video timing. */
 static gboolean video_tick(gpointer data) {
@@ -1139,52 +1423,22 @@ static gboolean video_tick(gpointer data) {
         gst_message_unref(message);
     }
 
-    if (canvas->audio_only) {
+    if (!canvas->audio_only) video_receive_frame(view);
+    /* Pipeline queries/seekability checks need not run at display refresh
+     * rate. Keep them off the critical path for panel animation frames. */
+    gint64 now = g_get_monotonic_time();
+    if (now - canvas->video_status_time >= 100000 || canvas->ended) {
         video_update_status(view);
-        return G_SOURCE_CONTINUE;
+        canvas->video_status_time = now;
     }
-    GstSample *preroll = gst_app_sink_try_pull_preroll(GST_APP_SINK(canvas->video_sink), 0);
-    GstSample *sample = gst_app_sink_try_pull_sample(GST_APP_SINK(canvas->video_sink), 0);
-    if (!sample && canvas->paused && !canvas->ended) {
-        sample = preroll;
-        preroll = NULL;
-    }
-    if (preroll) gst_sample_unref(preroll);
-    if (sample) {
-        GstVideoInfo info;
-        VideoPixels *owner = g_new0(VideoPixels, 1);
-        if (gst_video_info_from_caps(&info, gst_sample_get_caps(sample)) &&
-            gst_video_frame_map(&owner->frame, &info, gst_sample_get_buffer(sample), GST_MAP_READ)) {
-            int width = GST_VIDEO_INFO_WIDTH(&info), height = GST_VIDEO_INFO_HEIGHT(&info);
-            if (GST_VIDEO_INFO_FPS_D(&info) > 0)
-                canvas->video_fps = (double)GST_VIDEO_INFO_FPS_N(&info) / GST_VIDEO_INFO_FPS_D(&info);
-            bool first = !canvas->video_frame;
-            owner->sample = sample;
-            GdkPixbuf *pixbuf = gdk_pixbuf_new_from_data(
-                GST_VIDEO_FRAME_PLANE_DATA(&owner->frame, 0), GDK_COLORSPACE_RGB, FALSE, 8,
-                width, height, GST_VIDEO_FRAME_PLANE_STRIDE(&owner->frame, 0),
-                video_pixels_release, owner);
-            if (pixbuf) {
-                /* The pixbuf owns the sample/map until its last reference is
-                 * released. Decoder memory stays valid through paint/rotate. */
-                sample = NULL;
-                g_clear_object(&canvas->video_frame);
-                canvas->video_frame = pixbuf;
-                canvas_update_frame(canvas);
-                if (first) {
-                    canvas_fit(canvas, true);
-                    status_update(view, NULL, NULL);
-                    metadata_update(view);
-                }
-            } else {
-                gst_video_frame_unmap(&owner->frame);
-                g_free(owner);
-            }
-        } else g_free(owner);
-        if (sample) gst_sample_unref(sample);
-    }
-    video_update_status(view);
+    video_update_progress(view);
     return G_SOURCE_CONTINUE;
+}
+
+static gboolean video_display_tick(GtkWidget *widget, GdkFrameClock *clock, gpointer data) {
+    (void)widget;
+    (void)clock;
+    return video_tick(data);
 }
 
 static char *video_load(ImgView *view, const char *path) {
@@ -1223,7 +1477,14 @@ static char *video_load(ImgView *view, const char *path) {
         canvas_clear_image(canvas);
         return g_strdup("Could not start video playback; check GStreamer codecs and audio output");
     }
-    canvas->video_id = g_timeout_add(canvas->audio_only ? 100 : 10, video_tick, view);
+    /* Present only once per display frame, sharing GTK's update/paint cycle
+     * with the panels. The sink drops stale frames and retains media timing.
+     * Audio shares the frame clock for smooth timeline updates; headless
+     * playback uses the polling fallback. */
+    canvas->video_frame_clock = canvas->area != NULL;
+    canvas->video_id = canvas->video_frame_clock
+        ? gtk_widget_add_tick_callback(canvas->area, video_display_tick, view, NULL)
+        : g_timeout_add(10, video_tick, view);
     video_update_status(view);
     return NULL;
 }
@@ -1237,6 +1498,10 @@ static gboolean video_seek_to(Canvas *canvas, gint64 position) {
     if (gst_element_seek_simple(canvas->player, GST_FORMAT_TIME,
             GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE, position)) {
         canvas->ended = false;
+        video_progress_anchor(canvas, (double)position / GST_SECOND, g_get_monotonic_time());
+        /* Seeking is immediate; only normal playback timing corrections
+         * should glide from the previous visual position. */
+        canvas->progress_correction = 0;
         return TRUE;
     }
     return FALSE;
@@ -1251,9 +1516,13 @@ static void video_seek(Canvas *canvas, gint seconds) {
 static void video_toggle_pause(Canvas *canvas) {
     if (!canvas->player) return;
     if (canvas->ended) {
-        if (!gst_element_seek_simple(canvas->player, GST_FORMAT_TIME,
-                GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE, 0)) return;
-        canvas->ended = false;
+        if (!video_seek_to(canvas, 0)) return;
+    }
+    gint64 now = g_get_monotonic_time();
+    if (canvas->progress_time) {
+        canvas->progress_position = video_progress_position(canvas, now);
+        canvas->progress_correction = 0;
+        canvas->progress_time = now;
     }
     canvas->paused = !canvas->paused;
     gst_element_set_state(canvas->player, canvas->paused ? GST_STATE_PAUSED : GST_STATE_PLAYING);
@@ -1298,7 +1567,7 @@ static gboolean finish_pending_scan(gpointer data) {
     }
 
     GPtrArray *siblings = new_path_array();
-    add_dir_images(siblings, view->pending_scan_dir);
+    add_dir_media(siblings, view->pending_scan_dir);
 
     guint index = 0;
     bool found = false;
@@ -1385,6 +1654,39 @@ static void fullscreen_hover(ImgView *view, double x, double y) {
         view->status.scrubbing || (inside && y >= height - bottom));
 }
 
+static void cursor_set_hidden(ImgView *view, bool hidden) {
+    if (view->cursor_hidden == hidden) return;
+    GdkWindow *window = gtk_widget_get_window(view->window);
+    if (!window) return;
+    GdkCursor *cursor = hidden
+        ? gdk_cursor_new_for_display(gtk_widget_get_display(view->window), GDK_BLANK_CURSOR) : NULL;
+    gdk_window_set_cursor(window, cursor);
+    g_clear_object(&cursor);
+    view->cursor_hidden = hidden;
+}
+
+static void cursor_activity(ImgView *view) {
+    view->cursor_motion_time = g_get_monotonic_time();
+    cursor_set_hidden(view, false);
+}
+
+static void cursor_poll(ImgView *view, int x, int y, gint64 now) {
+    bool inside = x >= 0 && y >= 0 && x < gtk_widget_get_allocated_width(view->window) &&
+        y < gtk_widget_get_allocated_height(view->window);
+    if (!view->cursor_position_known || x != view->cursor_x || y != view->cursor_y) {
+        view->cursor_motion_time = now;
+        cursor_set_hidden(view, false);
+    }
+    view->cursor_position_known = true;
+    view->cursor_x = x;
+    view->cursor_y = y;
+    /* Polling also catches motion consumed by panel controls. Reuse the hover
+     * timer rather than adding a continuously running cursor timer. */
+    bool idle = view->fullscreen && inside && !view->canvas.dragging && !view->status.scrubbing &&
+        now - view->cursor_motion_time >= CURSOR_IDLE_US;
+    cursor_set_hidden(view, idle);
+}
+
 static gboolean fullscreen_hover_tick(gpointer data) {
     ImgView *view = data;
     playlist_thumbnails(view);
@@ -1392,9 +1694,31 @@ static gboolean fullscreen_hover_tick(gpointer data) {
     GdkDevice *pointer = gdk_seat_get_pointer(gdk_display_get_default_seat(gtk_widget_get_display(view->window)));
     int x, y, ox = 0, oy = 0;
     gdk_window_get_device_position(window, pointer, &x, &y, NULL);
+    cursor_poll(view, x, y, g_get_monotonic_time());
     gtk_widget_translate_coordinates(view->overlay, view->window, 0, 0, &ox, &oy);
     fullscreen_hover(view, x - ox, y - oy);
     return G_SOURCE_CONTINUE;
+}
+
+/* Coalesce pointer input to one hover update at the next display frame.
+ * The slower timer remains a fallback for child widgets that consume events. */
+static gboolean hover_frame(GtkWidget *widget, GdkFrameClock *clock, gpointer data) {
+    (void)widget;
+    (void)clock;
+    ImgView *view = data;
+    view->hover_frame_id = 0;
+    fullscreen_hover_tick(view);
+    return G_SOURCE_REMOVE;
+}
+
+static gboolean hover_motion(GtkWidget *widget, GdkEvent *event, gpointer data) {
+    (void)widget;
+    ImgView *view = data;
+    cursor_activity(view);
+    if (event->type == GDK_LEAVE_NOTIFY) view->cursor_position_known = false;
+    if (!view->hover_frame_id)
+        view->hover_frame_id = gtk_widget_add_tick_callback(view->window, hover_frame, view, NULL);
+    return FALSE;
 }
 
 static void toggle_fullscreen(ImgView *view) {
@@ -1404,6 +1728,7 @@ static void toggle_fullscreen(ImgView *view) {
         gtk_window_fullscreen(GTK_WINDOW(view->window));
     }
     view->fullscreen = !view->fullscreen;
+    cursor_activity(view);
     g_object_ref(view->status_host);
     gtk_container_remove(GTK_CONTAINER(gtk_widget_get_parent(view->status_host)), view->status_host);
     if (view->fullscreen) {
@@ -1676,6 +2001,7 @@ static void view_destroy(gpointer data) {
     if (view->window_save_id) g_source_remove(view->window_save_id);
     window_size_save(view);
     if (view->hover_id) g_source_remove(view->hover_id);
+    if (view->hover_frame_id) gtk_widget_remove_tick_callback(view->window, view->hover_frame_id);
     if (view->scan_id) g_source_remove(view->scan_id);
     if (view->slideshow_id) {
         g_source_remove(view->slideshow_id);
@@ -1798,18 +2124,13 @@ static void thumbnail_worker(GTask *task, gpointer source, gpointer data, GCance
             gst_element_set_state(player, GST_STATE_PAUSED);
             GstSample *sample = gst_app_sink_try_pull_preroll(GST_APP_SINK(sink), 2 * GST_SECOND);
             if (sample) {
-                GstVideoInfo info;
-                GstVideoFrame frame;
-                if (gst_video_info_from_caps(&info, gst_sample_get_caps(sample)) &&
-                    gst_video_frame_map(&frame, &info, gst_sample_get_buffer(sample), GST_MAP_READ)) {
-                    GdkPixbuf *full = gdk_pixbuf_new_from_data(GST_VIDEO_FRAME_PLANE_DATA(&frame, 0),
-                        GDK_COLORSPACE_RGB, FALSE, 8, info.width, info.height,
-                        GST_VIDEO_FRAME_PLANE_STRIDE(&frame, 0), NULL, NULL);
-                    double scale = MIN(72.0 / info.width, 44.0 / info.height);
-                    thumb = gdk_pixbuf_scale_simple(full, MAX(1, (int)(info.width * scale)),
-                        MAX(1, (int)(info.height * scale)), GDK_INTERP_BILINEAR);
+                GdkPixbuf *full = video_sample_pixbuf(sample, NULL);
+                if (full) {
+                    int width = gdk_pixbuf_get_width(full), height = gdk_pixbuf_get_height(full);
+                    double scale = MIN(72.0 / width, 44.0 / height);
+                    thumb = gdk_pixbuf_scale_simple(full, MAX(1, (int)(width * scale)),
+                        MAX(1, (int)(height * scale)), GDK_INTERP_BILINEAR);
                     g_object_unref(full);
-                    gst_video_frame_unmap(&frame);
                 }
                 gst_sample_unref(sample);
             }
@@ -1872,7 +2193,7 @@ static void playlist_refresh(ImgView *view) {
         g_free(view->playlist_dir); view->playlist_dir = g_strdup(dir);
         g_clear_pointer(&view->playlist_paths, g_ptr_array_unref);
         view->playlist_paths = new_path_array();
-        add_dir_images(view->playlist_paths, dir);
+        add_dir_media(view->playlist_paths, dir);
         view->thumbnail_next = 0;
         GList *rows = gtk_container_get_children(GTK_CONTAINER(view->playlist_list));
         for (GList *item = rows; item; item = item->next) gtk_widget_destroy(item->data);
@@ -2017,7 +2338,10 @@ static void create_window(ImgView *view) {
     gtk_container_add(GTK_CONTAINER(view->window), view->overlay);
 
     g_signal_connect(view->window, "key-press-event", G_CALLBACK(key_press), view);
-    gtk_widget_add_events(view->window, GDK_SCROLL_MASK | GDK_SMOOTH_SCROLL_MASK);
+    gtk_widget_add_events(view->window, GDK_SCROLL_MASK | GDK_SMOOTH_SCROLL_MASK |
+        GDK_POINTER_MOTION_MASK | GDK_LEAVE_NOTIFY_MASK);
+    g_signal_connect(view->window, "motion-notify-event", G_CALLBACK(hover_motion), view);
+    g_signal_connect(view->window, "leave-notify-event", G_CALLBACK(hover_motion), view);
     g_signal_connect(view->window, "scroll-event", G_CALLBACK(volume_scroll), view);
     g_signal_connect(view->window, "destroy", G_CALLBACK(window_destroy), view);
     g_signal_connect(view->window, "configure-event", G_CALLBACK(window_size_changed), view);
