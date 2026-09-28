@@ -1,9 +1,9 @@
 [Desktop Entry]
 Name=imgview
-Comment=Pan/zoom image viewer
+Comment=Image, video and audio viewer
 Exec=imgview %F
 Icon=image-viewer
 Terminal=false
 Type=Application
-MimeType=image/png;image/jpeg;image/gif;image/webp;image/bmp;image/tiff;image/x-tiff;image/ico;image/x-ico;image/x-icon;image/vnd.microsoft.icon;image/xpm;image/x-portable-pixmap;image/x-portable-graymap;image/x-portable-bitmap;
-Categories=Graphics;Viewer;
+MimeType=image/png;image/jpeg;image/gif;image/webp;image/bmp;image/tiff;image/x-tiff;image/ico;image/x-ico;image/x-icon;image/vnd.microsoft.icon;image/xpm;image/x-portable-pixmap;image/x-portable-graymap;image/x-portable-bitmap;image/avif;image/heic;image/heif;image/jxl;image/svg+xml;image/svg+xml-compressed;image/x-tga;image/vnd.ms-dds;image/x-dds;image/x-exr;image/x-qoi;image/x-icns;image/x-xbitmap;image/x-adobe-dng;image/x-canon-cr2;image/x-canon-crw;image/x-nikon-nef;image/x-olympus-orf;image/x-pentax-pef;image/x-sony-arw;image/x-fuji-raf;video/mp4;video/x-matroska;video/webm;video/quicktime;video/x-msvideo;video/ogg;video/mpeg;video/mp2t;video/x-ms-wmv;video/x-flv;video/3gpp;video/3gpp2;video/x-ms-asf;video/x-dv;video/x-h264;video/x-h265;application/mxf;application/vnd.rn-realmedia;application/vnd.rn-realmedia-vbr;audio/mpeg;audio/flac;audio/x-flac;audio/wav;audio/x-wav;audio/ogg;audio/opus;audio/mp4;audio/aac;audio/x-aiff;audio/x-ms-wma;audio/x-ape;
+Categories=Graphics;AudioVideo;Viewer;

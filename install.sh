@@ -34,6 +34,58 @@ MIME_TYPES=(
   image/x-portable-pixmap
   image/x-portable-graymap
   image/x-portable-bitmap
+  image/avif
+  image/heic
+  image/heif
+  image/jxl
+  image/svg+xml
+  image/svg+xml-compressed
+  image/x-tga
+  image/vnd.ms-dds
+  image/x-dds
+  image/x-exr
+  image/x-qoi
+  image/x-icns
+  image/x-xbitmap
+  image/x-adobe-dng
+  image/x-canon-cr2
+  image/x-canon-crw
+  image/x-nikon-nef
+  image/x-olympus-orf
+  image/x-pentax-pef
+  image/x-sony-arw
+  image/x-fuji-raf
+  video/mp4
+  video/x-matroska
+  video/webm
+  video/quicktime
+  video/x-msvideo
+  video/ogg
+  video/mpeg
+  video/mp2t
+  video/x-ms-wmv
+  video/x-flv
+  video/3gpp
+  video/3gpp2
+  video/x-ms-asf
+  video/x-dv
+  video/x-h264
+  video/x-h265
+  application/mxf
+  application/vnd.rn-realmedia
+  application/vnd.rn-realmedia-vbr
+  audio/mpeg
+  audio/flac
+  audio/x-flac
+  audio/wav
+  audio/x-wav
+  audio/ogg
+  audio/opus
+  audio/mp4
+  audio/aac
+  audio/x-aiff
+  audio/x-ms-wma
+  audio/x-ape
 )
 
 log() {
@@ -58,7 +110,7 @@ Options:
   --branch NAME      Install from a different git branch
   --repo URL         Install from a different repository URL
   --skip-deps        Do not install system packages
-  --no-defaults      Do not set imgview as the default image handler
+  --no-defaults      Do not set imgview as the default image/video handler
   --force-clone      Re-download even if a cached clone already exists
   -h, --help         Show this help
 EOF
@@ -198,21 +250,21 @@ install_deps() {
     apt-get)
       log "installing dependencies with apt"
       run_root apt-get update
-      run_root apt-get install -y build-essential make pkg-config libgtk-3-dev xdg-utils git
+      run_root apt-get install -y build-essential make pkg-config libgtk-3-dev libgif-dev xdg-utils git libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav
       ;;
     dnf)
       log "installing dependencies with dnf"
-      run_root dnf install -y gcc make pkgconf-pkg-config gtk3-devel xdg-utils git
+      run_root dnf install -y gcc make pkgconf-pkg-config gtk3-devel giflib-devel xdg-utils git gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free
       ;;
     pacman)
       log "installing dependencies with pacman"
       # Avoid partial upgrades on Arch; sync + install without -u can break
       # version-locked packages when core libraries move ahead of installed plugins.
-      run_root pacman -Syu --noconfirm --needed base-devel pkgconf gtk3 xdg-utils git
+      run_root pacman -Syu --noconfirm --needed base-devel pkgconf gtk3 giflib libheif xdg-utils git gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav
       ;;
     zypper)
       log "installing dependencies with zypper"
-      run_root zypper --non-interactive install gcc make pkg-config gtk3-devel xdg-utils git
+      run_root zypper --non-interactive install gcc make pkg-config gtk3-devel giflib-devel xdg-utils git gstreamer-devel gstreamer-plugins-base-devel gstreamer-plugins-base gstreamer-plugins-good gstreamer-plugins-bad
       ;;
   esac
 }
@@ -254,13 +306,13 @@ write_desktop_file() {
   cat >"$desktop_path" <<EOF
 [Desktop Entry]
 Name=imgview
-Comment=Pan/zoom image viewer
+Comment=Image, video and audio viewer
 Exec=${exec_path} %F
 Icon=image-viewer
 Terminal=false
 Type=Application
 MimeType=$(printf '%s;' "${MIME_TYPES[@]}")
-Categories=Graphics;Viewer;
+Categories=Graphics;AudioVideo;Viewer;
 EOF
 }
 
@@ -277,7 +329,7 @@ install_desktop_entry() {
   fi
 
   if [[ "$SET_MIME_DEFAULTS" -eq 0 ]]; then
-    log "desktop entry installed; default image handlers unchanged"
+    log "desktop entry installed; default image/video handlers unchanged"
     return 0
   fi
 
