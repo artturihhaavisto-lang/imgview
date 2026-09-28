@@ -62,8 +62,9 @@ A lightweight native GTK image, video and audio viewer inspired by Photoshop, wi
 bash <(curl -fsSL https://raw.githubusercontent.com/artturihhaavisto-lang/imgview/master/install.sh)
 ```
 
-This installs `imgview` for the current user under `~/.local`, creates a desktop entry,
-and sets it as the default handler for common image and video MIME types.
+This installs `imgview` for the current user under `~/.local`, installs the available
+GStreamer codec plugins for the detected distribution, creates a desktop entry,
+and sets it as the default handler for supported image, video, and audio MIME types.
 
 For a system-wide install:
 
@@ -91,14 +92,20 @@ GitHub instead.
 | `--system` | Install the executable under `/usr/local`. The script uses `sudo` when needed. |
 | `--prefix PATH` | Install under a custom prefix. User-writable prefixes do not require `sudo`. |
 | `--skip-deps` | Skip package manager dependency installation. |
-| `--no-defaults` | Install the desktop entry without changing default image handlers. |
+| `--no-defaults` | Install the desktop entry without changing default media handlers. |
 | `--branch NAME` | Fetch and install a different Git branch. |
 | `--repo URL` | Fetch and install from a different repository URL. |
 | `--force-clone` | Re-download the cached repository before installing. |
 
 On Arch-based systems, the installer uses `pacman -Syu --needed` before installing
-dependencies. This avoids partial-upgrade conflicts. If you manage dependencies
-yourself, install the packages listed below and pass `--skip-deps`.
+dependencies. This avoids partial-upgrade conflicts. On openSUSE it also tries to
+install the LibAV codec plugin; if it is unavailable from enabled repositories, the
+rest of the install succeeds and the script explains how to enable a codec source.
+Some codecs are restricted by distribution policy and cannot be installed from
+default repositories. For example, openSUSE's codec guide uses Packman for broader
+support; configure that repository yourself before rerunning the installer if you
+need those codecs. If you manage dependencies yourself, install the packages listed
+below and pass `--skip-deps`.
 
 ## Build
 
@@ -127,12 +134,15 @@ Package names used by the installer:
 
 | Distribution | Packages |
 |--------------|----------|
-| Arch | `base-devel pkgconf gtk3 giflib libheif xdg-utils git gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav` |
-| Debian/Ubuntu | `build-essential make pkg-config libgtk-3-dev libgif-dev xdg-utils git libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav` |
-| Fedora | `gcc make pkgconf-pkg-config gtk3-devel giflib-devel xdg-utils git gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free` |
-| openSUSE | `gcc make pkg-config gtk3-devel giflib-devel xdg-utils git gstreamer-devel gstreamer-plugins-base-devel gstreamer-plugins-base gstreamer-plugins-good gstreamer-plugins-bad` |
+| Arch | `base-devel pkgconf gtk3 giflib libheif xdg-utils git gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav` |
+| Debian/Ubuntu | `build-essential make pkg-config libgtk-3-dev libgif-dev xdg-utils git libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav` |
+| Fedora | `gcc make pkgconf-pkg-config gtk3-devel giflib-devel xdg-utils git gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugins-bad-free-extras gstreamer1-plugins-ugly-free gstreamer1-plugin-libav` |
+| openSUSE | `gcc make pkg-config gtk3-devel giflib-devel xdg-utils git gstreamer-devel gstreamer-plugins-base-devel gstreamer-plugins-base gstreamer-plugins-good gstreamer-plugins-bad gstreamer-plugins-ugly` (plus `gstreamer-plugins-libav` from an enabled repository) |
 
-Video codec availability depends on your distribution's installed GStreamer plugins.
+Codec support depends on which packages the distribution allows its configured
+repositories to provide. The installer adds the broadest standard-repository
+GStreamer set; restricted codecs may require an optional source such as Packman on
+openSUSE. It does not silently add third-party package repositories.
 GIFs decode incrementally with giflib: decoded frame memory stays bounded as the
 animation grows. Transparency, frame disposal, interlacing and finite/infinite
 loop counts are supported. Video pixbufs share their GStreamer pixel buffers,

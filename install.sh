@@ -110,7 +110,7 @@ Options:
   --branch NAME      Install from a different git branch
   --repo URL         Install from a different repository URL
   --skip-deps        Do not install system packages
-  --no-defaults      Do not set imgview as the default image/video handler
+  --no-defaults      Do not set imgview as the default media handler
   --force-clone      Re-download even if a cached clone already exists
   -h, --help         Show this help
 EOF
@@ -250,21 +250,29 @@ install_deps() {
     apt-get)
       log "installing dependencies with apt"
       run_root apt-get update
-      run_root apt-get install -y build-essential make pkg-config libgtk-3-dev libgif-dev xdg-utils git libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav
+      run_root apt-get install -y build-essential make pkg-config libgtk-3-dev libgif-dev xdg-utils git libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
       ;;
     dnf)
       log "installing dependencies with dnf"
-      run_root dnf install -y gcc make pkgconf-pkg-config gtk3-devel giflib-devel xdg-utils git gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free
+      run_root dnf install -y gcc make pkgconf-pkg-config gtk3-devel giflib-devel xdg-utils git gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugins-bad-free-extras gstreamer1-plugins-ugly-free gstreamer1-plugin-libav
       ;;
     pacman)
       log "installing dependencies with pacman"
       # Avoid partial upgrades on Arch; sync + install without -u can break
       # version-locked packages when core libraries move ahead of installed plugins.
-      run_root pacman -Syu --noconfirm --needed base-devel pkgconf gtk3 giflib libheif xdg-utils git gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav
+      run_root pacman -Syu --noconfirm --needed base-devel pkgconf gtk3 giflib libheif xdg-utils git gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad gst-plugins-ugly gst-libav
       ;;
     zypper)
       log "installing dependencies with zypper"
-      run_root zypper --non-interactive install gcc make pkg-config gtk3-devel giflib-devel xdg-utils git gstreamer-devel gstreamer-plugins-base-devel gstreamer-plugins-base gstreamer-plugins-good gstreamer-plugins-bad
+      run_root zypper --non-interactive install gcc make pkg-config gtk3-devel giflib-devel xdg-utils git gstreamer-devel gstreamer-plugins-base-devel gstreamer-plugins-base gstreamer-plugins-good gstreamer-plugins-bad gstreamer-plugins-ugly
+      # LibAV-backed decoding is provided by repositories such as Packman or
+      # PackageHub on some openSUSE variants. Try it without making those
+      # optional repositories a requirement for installing imgview itself.
+      if run_root zypper --non-interactive install gstreamer-plugins-libav; then
+        log "installed the GStreamer LibAV codec plugin"
+      else
+        log "GStreamer LibAV plugin was unavailable; enable a suitable repository (such as Packman) for broader codec support"
+      fi
       ;;
   esac
 }
@@ -329,7 +337,7 @@ install_desktop_entry() {
   fi
 
   if [[ "$SET_MIME_DEFAULTS" -eq 0 ]]; then
-    log "desktop entry installed; default image/video handlers unchanged"
+    log "desktop entry installed; default media handlers unchanged"
     return 0
   fi
 
